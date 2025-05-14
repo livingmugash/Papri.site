@@ -201,6 +201,9 @@ class SearchTask(models.Model):
     query_image_fingerprint = models.CharField(max_length=255, null=True, blank=True, db_index=True, help_text="Hash/fingerprint of the uploaded query image for quick checks.")
     
     applied_filters_json = models.JSONField(null=True, blank=True, help_text="JSON representation of filters applied to this search.")
+    result_video_ids_json = models.JSONField(null=True, blank=True, help_text="JSON array of Papri Video IDs for this task's results, ordered by rank.")
+    # NEW FIELD for richer results:
+    detailed_results_info_json = models.JSONField(null=True, blank=True, help_text="JSON array of detailed result info including scores and match types.")
     
     status_choices = [
         ('pending', 'Pending'),
