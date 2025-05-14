@@ -42,34 +42,79 @@ class VisualAnalyzer:
             self.cnn_model = None
             self.cnn_embedding_dim = 0
         
-        # Qdrant setup for visual embeddings (for video frames, not query image directly here)
-        # self.qdrant_visual_collection_name = settings.QDRANT_COLLECTION_VISUAL
-        # self.qdrant_client = None
-        # if self.cnn_embedding_dim > 0: # Only if CNN model loaded
-        #     try:
-        #         self.qdrant_client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=10)
-        #         self.qdrant_client.health_check()
-        #         self._ensure_qdrant_visual_collection_exists()
-        #         print(f"VisualAnalyzer: Connected to Qdrant for visual embeddings.")
-        #     except Exception as e:
-        #         print(f"VisualAnalyzer: CRITICAL - Qdrant connection failed for visual: {e}")
-        #         self.qdrant_client = None
-
+       # Qdrant setup for visual embeddings
+        self.qdrant_visual_collection_name = settings.QDRANT_COLLECTION_VISUAL # New collection name
+        self.qdrant_client = None
+        if self.cnn_embedding_dim > 0: # Only if CNN model loaded
+            try:
+                self.qdrant_client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY, timeout=10)
+                self.qdrant_client.health_check()
+                print(f"VisualAnalyzer: Connected to Qdrant for visual embeddings.")
+                self._ensure_qdrant_visual_collection_exists() # Call method to create if not exists
+            except Exception as e:
+                print(f"VisualAnalyzer: CRITICAL - Qdrant connection/collection setup failed for visual: {e}")
+                self.qdrant_client = None
+        
         print("VisualAnalyzer initialized.")
 
-    # def _ensure_qdrant_visual_collection_exists(self):
-    #     # Similar to TranscriptAnalyzer, but for visual embeddings
-    #     if not self.qdrant_client: return
-    #     try:
-    #         self.qdrant_client.get_collection(collection_name=self.qdrant_visual_collection_name)
-    #     except: # Simplified check, ideally catch specific "not found"
-    #         self.qdrant_client.recreate_collection(
-    #             collection_name=self.qdrant_visual_collection_name,
-    #             vectors_config=qdrant_models.VectorParams(size=self.cnn_embedding_dim, distance=qdrant_models.Distance.COSINE)
-    #         )
-    #         # Add payload indexes if needed (e.g., for video_frame_feature_django_id, video_papri_id)
-    #         self.qdrant_client.create_payload_index(collection_name=self.qdrant_visual_collection_name, field_name="video_papri_id", field_schema=qdrant_models.PayloadSchemaType.INTEGER)
-    #         print(f"Qdrant visual collection '{self.qdrant_visual_collection_name}' created/ensured.")
+    def _ensure_qdrant_visual_collection_exists(self):
+        if not self.qdrant_client:
+            print("VisualAnalyzer: Qdrant client not available for visual collection.")
+            return
+        try:
+            try:
+                self.qdrant_client.get_collection(collection_name=self.qdrant_visual_collection_name)
+                print(f"Qdrant visual collection '{self.qdrant_visual_collection_name}' already exists.")
+            except Exception: # Catching generic exception as "not found" varies
+                print(f"VisualAnalyzer: Visual collection '{self.qdrant_visual_collection_name}' may not exist. Creating.")
+                self.qdrant_client.recreate_collection(
+                    collection_name=self.qdrant_visual_collection_name,
+                    vectors_config=qdrant_models.VectorParams(size=self.cnn_embedding_dim, distance=qdrant_models.Distance.COSINE)
+                )
+                # Payload indexes for visual collection
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.qdrant_visual_collection_name,
+                    field_name="video_papri_id", # Canonical Video ID
+                    field_schema=qdrant_models.PayloadSchemaType.INTEGER # Or KEYWORD if string UUIDs
+                )
+                self.qdrant_client.create_payload_index(
+                    collection_name=self.qdrant_visual_collection_name,
+                    field_name="timestamp_ms", # Timestamp of the frame
+                    field_schema=qdrant_models.PayloadSchemaType.INTEGER
+                )
+                print(f"Qdrant visual collection '{self.qdrant_visual_collection_name}' created/ensured with payload indexes.")
+        except Exception as e:
+            print(f"VisualAnalyzer: Error ensuring Qdrant visual collection: {e}")
+
+    # ... (_load_and_preprocess_image, extract_cnn_embedding_from_image, generate_perceptual_hash, process_query_image methods as before) ...
+
+     def _store_frame_embedding_in_qdrant(self, video_frame_feature_django_id, video_papri_id, timestamp_ms, phash_value, embedding_vector):
+        if not self.qdrant_client or not embedding_vector:
+            print("VisualAnalyzer: Qdrant client not available or no visual embedding to store.")
+            return False
+        try:
+            points_to_upsert = [
+                qdrant_models.PointStruct(
+                    id=video_frame_feature_django_id, # Use Django VideoFrameFeature.id
+                    vector=embedding_vector,
+                    payload={
+                        "video_papri_id": video_papri_id,
+                        "timestamp_ms": timestamp_ms,
+                        "phash": phash_value # Store phash in payload for potential filtering/retrieval
+                    }
+                )
+            ]
+            self.qdrant_client.upsert_points(
+                collection_name=self.qdrant_visual_collection_name,
+                points=points_to_upsert,
+                wait=True
+            )
+            # print(f"VA: Upserted frame embedding for VFF ID {video_frame_feature_django_id} into Qdrant.")
+            return True
+        except Exception as e:
+            print(f"VisualAnalyzer: Error storing frame embedding in Qdrant for VFF ID {video_frame_feature_django_id}: {e}")
+            return False
+
 
 
     def _load_and_preprocess_image(self, image_path_or_pil_image):
