@@ -15,12 +15,20 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.sites', # Required by allauth
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google', # For Google Sign-In
     'rest_framework',
     'corsheaders', # For allowing frontend requests
     'api',
     'ai_agents',
     'payments',# Add social auth apps if using django-allauth or similar
 ] 
+
+
+
 
 
 MIDDLEWARE = [
@@ -99,16 +107,85 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG # For development
 #     "https_your_production_domain.com",
 # ]
 
-# REST Framework
+# Add REST Framework settings (if not already present)
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework.authentication.SessionAuthentication',
-        # Add token authentication if needed for mobile/third-party APIs
+        'rest_framework.authentication.SessionAuthentication', # Good for web clients
+        # 'rest_framework_simplejwt.authentication.JWTAuthentication', # If using JWT
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
-    )
+        'rest_framework.permissions.IsAuthenticatedOrReadOnly', # Or more specific permissions
+    ),
+    'DEFAULT_RENDERER_CLASSES': (
+        'rest_framework.renderers.JSONRenderer',
+        # Add BrowsableAPIRenderer if you want the browsable API for development
+        'rest_framework.renderers.BrowsableAPIRenderer',
+    ),
+    # Throttling can be added later
+    # 'DEFAULT_THROTTLE_CLASSES': [
+    #     'rest_framework.throttling.AnonRateThrottle',
+    #     'rest_framework.throttling.UserRateThrottle'
+    # ],
+    # 'DEFAULT_THROTTLE_RATES': {
+    #     'anon': '100/day',
+    #     'user': '1000/day'
+    # }
 }
+
+# Allauth settings
+AUTHENTICATION_BACKENDS = (
+    'django.contrib.auth.backends.ModelBackend', # Needed to login by username in Django admin
+    'allauth.account.auth_backends.AuthenticationBackend', # Allauth specific authentication methods
+)
+
+SITE_ID = 1 # Django sites framework
+
+ACCOUNT_EMAIL_VERIFICATION = 'optional' # Or 'mandatory' or 'none'
+ACCOUNT_AUTHENTICATION_METHOD = 'email' # Or 'username' or 'username_email'
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_UNIQUE_EMAIL = True
+# ACCOUNT_USERNAME_REQUIRED = False # If using email as primary identifier
+# LOGIN_REDIRECT_URL = '/' # Where to redirect after login (can be frontend URL)
+# LOGOUT_REDIRECT_URL = '/' # Where to redirect after logout
+
+# Provider specific settings for Google (placeholders for now)
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': [
+            'profile',
+            'email',
+        ],
+        'AUTH_PARAMS': {
+            'access_type': 'online',
+        }
+        # You'll need to add your Google API client ID and secret here later
+        # 'APP': {
+        #     'client_id': 'YOUR_GOOGLE_CLIENT_ID',
+        #     'secret': 'YOUR_GOOGLE_CLIENT_SECRET',
+        #     'key': '' # Can be left empty
+        # }
+    }
+}
+
+# CORS settings (adjust origins as needed for development and production)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000", # Example for a React frontend
+    "http://127.0.0.1:3000",
+    "http://localhost:8080", # Example for Vue/other frontend dev server
+    "http://127.0.0.1:8080",
+    # Add your frontend production domain here
+]
+CORS_ALLOW_CREDENTIALS = True # Important for session-based auth / cookies
+
+# CSRF settings - if your frontend and backend are on different subdomains/ports
+# CSRF_TRUSTED_ORIGINS = [
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+# ]
+# SESSION_COOKIE_SAMESITE = 'Lax' # Or 'None' if cross-site, requires Secure
+# CSRF_COOKIE_SAMESITE = 'Lax'    # Or 'None' if cross-site, requires Secure
+# SESSION_COOKIE_SECURE = False   # Set to True in production with HTTPS
+# CSRF_COOKIE_SECURE = False      # Set to True in production with HTTPS
 
 # Celery Configuration
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
