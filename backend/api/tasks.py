@@ -10,66 +10,42 @@ from .models import SearchTask #, Video, VideoSource, Transcript, etc. - import 
 # Import the AI Agent Orchestrator (to be created later)
 # from backend.ai_agents.main_orchestrator import PapriAIAgentOrchestrator # Assuming orchestrator is in backend/ai_agents
 
-@shared_task(bind=True, name='api.process_search_query') # name gives it an explicit reference
+@shared_task(bind=True, name='api.process_search_query')
 def process_search_query(self, search_task_id):
-    """
-    Asynchronous Celery task to process a video search query.
-    This task will invoke the AI Agent system.
-    """
-    print(f"Celery Task ID: {self.request.id} | Papri SearchTask ID: {search_task_id} - Received for processing.")
-
+    # ... (try block, fetching search_task, preparing search_parameters as before) ...
     try:
-        # 1. Fetch the SearchTask object from the database
         search_task = SearchTask.objects.get(id=search_task_id)
         search_task.status = 'processing'
-        search_task.save(update_fields=['status']) # Update only status field
-        print(f"SearchTask {search_task_id}: Status updated to 'processing'.")
+        search_task.save(update_fields=['status'])
+        # ... (search_parameters prep) ...
 
-        # 2. Prepare search parameters for the AI Agent
-        # These parameters would come from the search_task object
-        search_params = {
-            'query_text': search_task.query_text,
-            'query_image_ref': search_task.query_image_ref, # Path or S3 key to the image
-            'applied_filters': search_task.applied_filters_json,
-            'user_id': str(search_task.user_id) if search_task.user else None,
-            'session_id': search_task.session_id,
-        }
-        print(f"SearchTask {search_task_id}: Prepared params for AI Agent: {search_params}")
+        orchestrator = PapriAIAgentOrchestrator(papri_search_task_id=search_task_id)
+        orchestration_result = orchestrator.execute_search(search_parameters) # Returns dict
 
-        # ------------------------------------------------------------------
-        # 3. Instantiate and invoke the AI Agent Orchestrator (Conceptual)
-        #    This is where the core AI logic will execute.
-        #
-        #    orchestrator = PapriAIAgentOrchestrator(papri_task_id=search_task_id)
-        #    aggregated_results = orchestrator.execute_search(search_params)
-        #
-        #    For now, we'll simulate this process.
-        # ------------------------------------------------------------------
-        print(f"SearchTask {search_task_id}: Simulating AI Agent processing...")
-        time.sleep(10) # Simulate 10 seconds of AI work (API calls, NLP, CV)
-        
-        # --- Simulate results that the AI Agent might return ---
-        # In a real scenario, `aggregated_results` would be a list of Video objects or dicts
-        # that the AI agent system has found and processed.
-        # These results then need to be saved to the database (e.g., Video, VideoSource models)
-        # and linked to the SearchTask if you have a direct result storage model.
-        
-        # For example, the orchestrator might return a list of Video IDs found and ranked:
-        # ranked_video_ids = [video1.id, video2.id, ...]
-        # Or it might directly create/update Video and VideoSource entries.
-        
-        # For this basic setup, we'll just mark the task as completed.
-        # The SearchResultsView will then fetch data based on some criteria later.
-        # --- End Simulation ---
+        print(f"SearchTask {search_task_id}: Orchestration result: ItemsFetched={orchestration_result.get('items_fetched_from_sources')}, ItemsAnalyzed={orchestration_result.get('items_analyzed_for_content')}, RankedCount={orchestration_result.get('ranked_video_count')}")
 
-        # 4. Update the SearchTask status to 'completed'
-        search_task.status = 'completed'
+        if orchestration_result and "error" not in orchestration_result:
+            search_task.status = 'completed'
+            # Get the list of ranked video IDs
+            ranked_ids = orchestration_result.get("persisted_video_ids_ranked", []) # This key was from Orchestrator
+            search_task.result_video_ids_json = ranked_ids 
+            
+            # Optionally store more detailed results if SearchTask model is extended
+            # search_task.detailed_results_json = orchestration_result.get("results_with_scores") 
+        else:
+            search_task.status = 'failed'
+            search_task.error_message = orchestration_result.get("error", "Unknown error during orchestration.")
+        
         search_task.updated_at = timezone.now()
-        # search_task.result_summary_json = {"message": "Simulated successful completion", "items_found": 2} # Example
-        search_task.save(update_fields=['status', 'updated_at']) # 'result_summary_json'
-        print(f"SearchTask {search_task_id}: Processing complete. Status updated to 'completed'.")
-
-        return {"status": "completed", "search_task_id": str(search_task_id), "message": "Search processed successfully."}
+        search_task.save(update_fields=['status', 'error_message', 'updated_at', 'result_video_ids_json'])
+        print(f"SearchTask {search_task_id}: Final status '{search_task.status}'. {len(search_task.result_video_ids_json or [])} results linked.")
+        
+        return {
+            "status": search_task.status,
+            "search_task_id": str(search_task_id),
+            "message": orchestration_result.get("message", search_task.error_message),
+            "ranked_video_count": len(search_task.result_video_ids_json or [])
+        }
 
     except SearchTask.DoesNotExist:
         print(f"Error: SearchTask with ID {search_task_id} not found.")
