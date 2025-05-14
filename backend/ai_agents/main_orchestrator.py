@@ -56,24 +56,21 @@ class PapriAIAgentOrchestrator:
                     except Exception as e: print(f"Orchestrator: Error CAAgent for source {vs_obj.id}: {e}")
 
 
-        # 5. Result Aggregation & Ranking
-        ranked_results_with_scores_and_types = [] # Expects list of dicts from RARAgent
+         # 5. Result Aggregation & Ranking (RARAgent)
+        ranked_results_details = [] # Expects list of dicts from RARAgent
         try:
-            ranked_results_with_scores_and_types = self.ra_agent.aggregate_and_rank_results(
+            ranked_results_details = self.ra_agent.aggregate_and_rank_results(
                 persisted_video_source_objects, 
                 processed_query_data,
                 all_analysis_data 
             )
         except Exception as e:
+            # ... (fallback as before) ...
             print(f"Orchestrator: Error in Result Aggregation Agent: {e}")
-            # Fallback: use unranked IDs from persisted sources if RARAgent fails
-            ranked_results_with_scores_and_types = [
-                {'video_id': vs.video.id, 'combined_score': 0.0, 'match_types': ['fallback_fetch']} 
-                for vs in persisted_video_source_objects if vs.video
-            ]
+            ranked_results_details = [{'video_id': vs.video.id, 'combined_score': 0.0, 'match_types': ['fallback_fetch'], 'best_match_timestamp_ms': None} for vs in persisted_video_source_objects if vs.video]
 
-        # Extract just the IDs for SearchTask storage
-        final_ranked_video_ids = [item['video_id'] for item in ranked_results_with_scores_and_types]
+        final_ranked_video_ids = [item['video_id'] for item in ranked_results_details]
+
 
         return {
             "message": "Search orchestrated with multi-modal ranking.",
@@ -81,7 +78,6 @@ class PapriAIAgentOrchestrator:
             "items_analyzed_for_content": len(all_analysis_data),
             "ranked_video_count": len(final_ranked_video_ids),
             "persisted_video_ids_ranked": final_ranked_video_ids, # For SearchTask.result_video_ids_json
-            # Return the full scored/typed results for potential detailed storage or direct API response
             "results_data_detailed": ranked_results_with_scores_and_types 
         }
 
