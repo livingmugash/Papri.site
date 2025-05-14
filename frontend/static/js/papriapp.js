@@ -527,3 +527,24 @@ function formatDuration(totalSeconds) {
 // ... (showStatusMessage, switchView, setupReferralCopy, setupSettingsActions, setupLogout, updateUserInfoPlaceholders, handleResultAction etc.) ...
 // Ensure handleResultAction is adapted for any data attributes you add to buttons for interaction.
 
+// In createResultCardElement_Django(video_result)
+
+    // ...
+    const matchTypes = video_result.match_types || [];
+    let matchTypesHtml = '';
+    if (matchTypes.length > 0) {
+        matchTypesHtml = `<p class="text-xs text-blue-500 mt-1">Matched on: ${matchTypes.join(', ').replace(/_/g, ' ')}</p>`;
+    }
+    // ...
+    // Add matchTypesHtml to your card.innerHTML, for example:
+    // card.innerHTML = `
+    //     ...
+    //     <div class="flex-grow min-w-0">
+    //         ... (title, pub_date, description) ...
+    //         ${matchTypesHtml} 
+    //         <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center mt-2"> 
+    //             ... (buttons) ...
+    //         </div>
+    //     </div>
+    // `;
+    // ...
