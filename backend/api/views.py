@@ -53,16 +53,12 @@ def auth_status_view(request):
 
 # --- Search Task Views ---
 class InitiateSearchView(views.APIView):
-    """
-    Initiates a new search task.
-    Accepts either 'query_text' or 'query_image'.
-    """
-    permission_classes = [AllowAny] # Allow anonymous searches for now, or use IsAuthenticated
+    permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
         query_text = request.data.get('query_text')
-        query_image = request.FILES.get('query_image') # For image uploads
-        filters_json = request.data.get('filters', {}) # e.g., {'duration': 'short', 'platform': 'youtube'}
+        query_image = request.FILES.get('query_image')
+        filters_json = request.data.get('filters', {})
 
         if not query_text and not query_image:
             return Response(
@@ -70,34 +66,26 @@ class InitiateSearchView(views.APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Basic validation for image if provided
         image_ref = None
-        image_fingerprint = None # You'd generate this later
         if query_image:
-            # For now, just save the image temporarily. In production, use S3 or similar.
-            # Ensure MEDIA_ROOT is configured in settings.py
-            # And that the 'media' directory exists at your project root or specified path.
             temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_query_images')
             os.makedirs(temp_dir, exist_ok=True)
-            
-            # Generate a unique filename
-            ext = query_image.name.split('.')[-1]
+            ext = query_image.name.split('.')[-1] if '.' in query_image.name else 'tmp'
             unique_filename = f"{uuid.uuid4()}.{ext}"
             image_path = os.path.join(temp_dir, unique_filename)
-            
             try:
                 with open(image_path, 'wb+') as destination:
                     for chunk in query_image.chunks():
                         destination.write(chunk)
-                image_ref = image_path # Store the path as a reference
-                # Here you would also ideally generate an image_fingerprint (e.g., pHash)
+                image_ref = image_path
             except Exception as e:
-                return Response({"error": f"Could not save query image: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+                # Log the error
+                print(f"Error saving query image: {str(e)}")
+                return Response({"error": f"Could not save query image."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         user = request.user if request.user.is_authenticated else None
         session_id = request.session.session_key
-        if not session_id and not user: # Ensure session is created for anon users
+        if not session_id and not user:
             request.session.save()
             session_id = request.session.session_key
 
@@ -106,23 +94,31 @@ class InitiateSearchView(views.APIView):
             session_id=session_id,
             query_text=query_text,
             query_image_ref=image_ref,
-            # query_image_fingerprint=image_fingerprint, # Add once fingerprinting is implemented
             applied_filters_json=filters_json,
-            status='pending'
+            status='pending' # Initial status
         )
 
         # ---- TRIGGER CELERY TASK ----
-        # process_search_query.delay(search_task.id)
-        # For now, we'll simulate completion or just return the task ID.
-        # When Celery is set up, uncomment the line above.
-        # For testing without Celery immediately:
-        # search_task.status = 'processing' # or 'completed' if simulating
-        # search_task.save()
+        try:
+            # Send the task to Celery. Pass the search_task_id.
+            process_search_query.delay(search_task.id)
+            print(f"Celery task process_search_query dispatched for SearchTask ID: {search_task.id}")
+        except Exception as e:
+            # Handle case where Celery might not be available (e.g., broker down)
+            # Log this critical error
+            print(f"CRITICAL: Failed to dispatch Celery task for SearchTask ID {search_task.id}: {e}")
+            search_task.status = 'failed'
+            search_task.error_message = "Failed to initiate search processing."
+            search_task.save()
+            # Return an error to the user
+            return Response(
+                {"error": "There was an issue initiating your search. Please try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         # ----------------------------
 
         serializer = SearchTaskSerializer(search_task)
-        return Response(serializer.data, status=status.HTTP_202_ACCEPTED) # 202 Accepted as it's async
-
+        return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
 class SearchStatusView(views.APIView):
     """
     Retrieves the status and basic details of a specific search task.
