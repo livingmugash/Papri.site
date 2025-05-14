@@ -270,4 +270,23 @@ ACCOUNT_LOGOUT_ON_GET = True # For easier logout links
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'media') # Creates a 'media' folder at the same level as 'backend' and 'frontend'
 
+# Celery Configuration Options
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0') # To store task results/status
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE # Use your Django project's timezone
+CELERY_TASK_TRACK_STARTED = True # To get 'STARTED' state
+CELERY_TASK_SEND_SENT_EVENT = True # To send task-sent events
+CELERY_RESULT_EXTENDED = True # To store more metadata about tasks
+
+# Optional: if you want Celery Beat for scheduled tasks later
+# CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+```
+
+*Make sure you have Redis (or another broker like RabbitMQ) installed and running. For Redis on Ubuntu: `sudo apt install redis-server`, then `sudo systemctl start redis-server`, `sudo systemctl enable redis-server`.*
+*Install Celery and Redis client for Python: `pip install celery redis`*
+*If using `django-celery-results` for storing results in Django DB (alternative to Redis result backend): `pip install django-celery-results` and add `'django_celery_results'` to `INSTALLED_APPS`.*
+
 # ... rest of settings ...
