@@ -548,3 +548,42 @@ function formatDuration(totalSeconds) {
     //     </div>
     // `;
     // ...
+
+// frontend/static/js/papriapp.js
+// In createResultCardElement_Django(video_result)
+
+    // ...
+    const matchTypes = video_result.match_types || [];
+    const bestMatchTimestampMs = video_result.best_match_timestamp_ms;
+    let matchInfoHtml = '';
+
+    if (matchTypes.length > 0) {
+        let typesString = matchTypes.map(type => {
+            if (type === 'text_kw') return 'Keywords';
+            if (type === 'text_sem') return 'Text Meaning';
+            if (type === 'vis_cnn') return 'Image Similarity';
+            if (type === 'vis_phash') return 'Exact Image Match';
+            return type;
+        }).join(', ');
+        matchInfoHtml += `<p class="text-xs text-blue-600 font-medium mt-1">Matched on: ${typesString}</p>`;
+    }
+    if (bestMatchTimestampMs !== null && bestMatchTimestampMs !== undefined) {
+        matchInfoHtml += `<p class="text-xs text-green-600 mt-1">Best visual match around: ${formatDuration(bestMatchTimestampMs / 1000)}</p>`;
+        // Add data attribute to card or preview button for this timestamp
+        card.dataset.bestMatchTimestamp = bestMatchTimestampMs / 1000; // in seconds
+    }
+    // ...
+    // Add matchInfoHtml to your card.innerHTML:
+    // card.innerHTML = `
+    //     ...
+    //     <div class="flex-grow min-w-0">
+    //         ... (title, pub_date, description) ...
+    //         ${matchInfoHtml} {/* Display match info */}
+    //         <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center mt-2"> 
+    //             ... (buttons) ...
+    //             {/* Modify preview button to use bestMatchTimestamp if available */}
+    //         </div>
+    //     </div>
+    // `;
+    // ...
+                    
