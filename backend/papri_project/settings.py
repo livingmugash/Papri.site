@@ -265,3 +265,9 @@ SOCIALACCOUNT_PROVIDERS = {
 LOGIN_REDIRECT_URL = '/app/' # Redirect to papriapp.html after login
 LOGOUT_REDIRECT_URL = '/'   # Redirect to landing page after logout
 ACCOUNT_LOGOUT_ON_GET = True # For easier logout links
+
+# Media files (user-uploaded content)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'media') # Creates a 'media' folder at the same level as 'backend' and 'frontend'
+
+# ... rest of settings ...
