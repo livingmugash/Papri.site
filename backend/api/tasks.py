@@ -3,69 +3,73 @@
 from celery import shared_task
 from django.utils import timezone
 import time # For simulating work
-
-# Import your models
 from .models import SearchTask #, Video, VideoSource, Transcript, etc. - import as needed by the task
+from backend.ai_agents.main_orchestrator import PapriAIAgentOrchestrator # Assuming orchestrator is in backend/ai_agents
+import subprocess
+import tempfile
 
-# Import the AI Agent Orchestrator (to be created later)
-# from backend.ai_agents.main_orchestrator import PapriAIAgentOrchestrator # Assuming orchestrator is in backend/ai_agents
-
-@shared_task(bind=True, name='api.process_search_query')
-def process_search_query(self, search_task_id):
-    # ... (try block, fetching search_task, preparing search_parameters as before) ...
+@shared_task(bind=True, name='api.index_video_visual_features')
+def index_video_visual_features(self, video_source_id):
+    print(f"Celery Task: Starting visual feature indexing for VideoSource ID {video_source_id}")
     try:
-        search_task = SearchTask.objects.get(id=search_task_id)
-        search_task.status = 'processing'
-        search_task.save(update_fields=['status'])
-        # ... (search_parameters prep) ...
+        video_source = VideoSource.objects.select_related('video').get(id=video_source_id)
+        if not video_source.video: # Ensure linked to a canonical video
+            print(f"VisualIndexTask: VideoSource {video_source_id} not linked to a Papri Video. Skipping.")
+            return {"status": "skipped", "reason": "Not linked to Papri Video"}
 
-        orchestrator = PapriAIAgentOrchestrator(papri_search_task_id=search_task_id)
-        orchestration_result = orchestrator.execute_search(search_parameters) # Returns dict
+        # 1. Download the video using yt-dlp to a temporary location
+        video_url = video_source.original_url
+        # Create a temporary directory for the download
+        with tempfile.TemporaryDirectory(prefix="papri_video_download_") as tmpdir:
+            # -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4 chooses best MP4 or merges.
+            # --output specifies template for filename. We want a predictable name or just one file.
+            # Using %(id)s.%(ext)s to get platform_video_id as filename.
+            # Or just a fixed name like 'video.mp4' inside tmpdir.
+            output_template = os.path.join(tmpdir, "downloaded_video.%(ext)s")
+            # Limit download duration for testing/sanity (e.g., first 5 minutes) using --download-sections
+            # For full analysis, remove or adjust time limits.
+            # Example: "*0-5:00" for first 5 minutes.
+            # ydl_opts = ['-f', 'best[ext=mp4]/mp4', '--output', output_template, '--download-sections', '*0-1:00'] # First 1 min for testing
+            ydl_opts = ['-f', 'worstvideo[ext=mp4][height<=480]/mp4', # Get smaller video for faster processing
+                        '--output', output_template,
+                        '--no-playlist', # Ensure only single video if URL is part of playlist
+                        '--max-filesize', '100M', # Limit filesize
+                        '--extractor-args', 'youtube:player_client=web'] # Helps with some YT downloads
 
-        print(f"SearchTask {search_task_id}: Orchestration result: ItemsFetched={orchestration_result.get('items_fetched_from_sources')}, ItemsAnalyzed={orchestration_result.get('items_analyzed_for_content')}, RankedCount={orchestration_result.get('ranked_video_count')}")
+            print(f"VisualIndexTask: Downloading {video_url} with yt-dlp to {tmpdir}...")
 
-        if orchestration_result and "error" not in orchestration_result:
-            search_task.status = 'completed'
-            # Get the list of ranked video IDs
-            ranked_ids = orchestration_result.get("persisted_video_ids_ranked", []) # This key was from Orchestrator
-            search_task.result_video_ids_json = ranked_ids 
-            
-            # Optionally store more detailed results if SearchTask model is extended
-            # search_task.detailed_results_json = orchestration_result.get("results_with_scores") 
-        else:
-            search_task.status = 'failed'
-            search_task.error_message = orchestration_result.get("error", "Unknown error during orchestration.")
-        
-        search_task.updated_at = timezone.now()
-        search_task.save(update_fields=['status', 'error_message', 'updated_at', 'result_video_ids_json'])
-        print(f"SearchTask {search_task_id}: Final status '{search_task.status}'. {len(search_task.result_video_ids_json or [])} results linked.")
-        
-        return {
-            "status": search_task.status,
-            "search_task_id": str(search_task_id),
-            "message": orchestration_result.get("message", search_task.error_message),
-            "ranked_video_count": len(search_task.result_video_ids_json or [])
-        }
+            process = subprocess.run(['yt-dlp'] + ydl_opts + [video_url], capture_output=True, text=True, check=False)
 
-    except SearchTask.DoesNotExist:
-        print(f"Error: SearchTask with ID {search_task_id} not found.")
-        # self.update_state(state='FAILURE', meta={'exc': 'SearchTask.DoesNotExist'}) # Optionally update Celery task state
-        return {"status": "failed", "search_task_id": str(search_task_id), "error": "Search task not found."}
+            if process.returncode != 0:
+                print(f"VisualIndexTask: yt-dlp failed for {video_url}. Error: {process.stderr}")
+                # Update VideoSource or a VisualProcessingLog model to indicate download failure
+                return {"status": "failed_download", "error": process.stderr}
+
+            # Find the downloaded file (yt-dlp might add video ID to filename)
+            downloaded_file_path = None
+            for f_name in os.listdir(tmpdir):
+                if f_name.startswith("downloaded_video"):
+                    downloaded_file_path = os.path.join(tmpdir, f_name)
+                    break
+
+            if not downloaded_file_path:
+                print(f"VisualIndexTask: Could not find downloaded video file in {tmpdir} for {video_url}.")
+                return {"status": "failed_download", "error": "Downloaded file not found."}
+
+            print(f"VisualIndexTask: Downloaded to {downloaded_file_path}. Size: {os.path.getsize(downloaded_file_path)} bytes.")
+
+            # 2. Call VisualAnalyzer to process this downloaded video
+            analyzer = VisualAnalyzer() # Instantiates CNN, Qdrant client etc.
+            result = analyzer.index_video_frames(video_source, downloaded_file_path)
+
+            print(f"VisualIndexTask: VisualAnalyzer result for {video_source_id}: {result}")
+            # Optionally, update a status on VideoSource or Video model indicating visual indexing complete/failed
+            return {"status": "completed", "result": result}
+
+    except VideoSource.DoesNotExist:
+        print(f"VisualIndexTask: VideoSource ID {video_source_id} not found.")
+        return {"status": "error", "reason": "VideoSource not found"}
     except Exception as e:
-        print(f"Error processing SearchTask {search_task_id}: {e}")
-        # Attempt to update the SearchTask object in the DB with the error
-        try:
-            search_task_on_error = SearchTask.objects.get(id=search_task_id)
-            search_task_on_error.status = 'failed'
-            search_task_on_error.error_message = str(e)[:1000] # Truncate if necessary
-            search_task_on_error.updated_at = timezone.now()
-            search_task_on_error.save(update_fields=['status', 'error_message', 'updated_at'])
-        except SearchTask.DoesNotExist:
-            pass # Task was not found initially
-        except Exception as db_error: # Catch error during DB update
-             print(f"Could not update SearchTask {search_task_id} with error state: {db_error}")
-
-        # self.update_state(state='FAILURE', meta={'exc': type(e).__name__, 'exc_message': str(e)}) # Update Celery task state
-        # To prevent Celery from retrying indefinitely for app-level errors unless specifically configured:
-        # raise Ignore()
-        return {"status": "failed", "search_task_id": str(search_task_id), "error": str(e)}
+        print(f"VisualIndexTask: Error processing video {video_source_id}: {e}")
+        # Optionally, mark the video_source as failed visual processing
+        return {"status": "error", "reason": str(e)}
