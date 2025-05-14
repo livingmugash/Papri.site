@@ -1,97 +1,281 @@
 # backend/api/views.py
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, permissions
-from rest_framework.parsers import MultiPartParser, FormParser # For file uploads
-# from ..tasks import process_video_search_task # Import your Celery task
-import uuid # For generating task IDs
+from django.shortcuts import get_object_or_404
+from django.contrib.auth.models import User
+from django.utils import timezone
+from django.conf import settings # For accessing settings like MEDIA_ROOT
 
-class VideoSearchView(APIView):
-    permission_classes = [permissions.IsAuthenticated] # Require login for search
-    parser_classes = (MultiPartParser, FormParser) # To handle file uploads (screenshots)
+from rest_framework import status, generics, views
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.decorators import api_view, permission_classes
+
+# Import your models
+from .models import SearchTask, VideoSource, SignupCode # Add other models as needed
+
+# Import your serializers (we'll create these next)
+from .serializers import (
+    SearchTaskSerializer,
+    UserSerializer, # For user details
+    # VideoSourceSerializer, # If you need to serialize video results directly
+    SignupCodeSerializer,
+    ActivateAccountSerializer
+)
+
+# Import Celery tasks (we'll create this file soon)
+# from backend.tasks import process_search_query # Assuming tasks.py is in 'backend' app or project root
+
+import uuid
+import os # For handling file paths if image uploads are stored temporarily
+
+# --- User Authentication Views (Placeholders/Basic) ---
+class UserDetailView(generics.RetrieveAPIView):
+    """
+    Provides the details of the currently authenticated user.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserSerializer
+
+    def get_object(self):
+        return self.request.user
+
+@api_view(['GET'])
+@permission_classes([AllowAny]) # Or IsAuthenticated if you only want logged-in users to see this
+def auth_status_view(request):
+    """
+    Checks if the user is authenticated and returns user info if they are.
+    Useful for frontend to determine auth state.
+    """
+    if request.user.is_authenticated:
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
+    return Response({'is_authenticated': False}, status=status.HTTP_200_OK)
+
+
+# --- Search Task Views ---
+class InitiateSearchView(views.APIView):
+    """
+    Initiates a new search task.
+    Accepts either 'query_text' or 'query_image'.
+    """
+    permission_classes = [AllowAny] # Allow anonymous searches for now, or use IsAuthenticated
 
     def post(self, request, *args, **kwargs):
         query_text = request.data.get('query_text')
-        video_url = request.data.get('video_url') # Optional URL of a specific video to search within
-        screenshot_file = request.FILES.get('screenshot') # Uploaded image file
+        query_image = request.FILES.get('query_image') # For image uploads
+        filters_json = request.data.get('filters', {}) # e.g., {'duration': 'short', 'platform': 'youtube'}
 
-        if not query_text and not screenshot_file:
+        if not query_text and not query_image:
             return Response(
-                {'error': 'Please provide a text query or upload a screenshot.'},
+                {"error": "Either 'query_text' or 'query_image' must be provided."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        task_id = str(uuid.uuid4())
-        search_params = {
-            'query_text': query_text,
-            'video_url': video_url,
-            # We won't pass the file directly to Celery, save it temporarily or pass path
-        }
-
-        if screenshot_file:
-            # TODO: Securely save the screenshot temporarily or process its path
-            # For now, let's assume we pass a path or a reference.
-            # For a real implementation, you'd save to a temporary location or S3,
-            # then pass the path/key to the Celery task.
-            # fs = FileSystemStorage(location=settings.MEDIA_ROOT / 'temp_screenshots')
-            # filename = fs.save(screenshot_file.name, screenshot_file)
-            # file_path = fs.url(filename) # This path needs to be accessible by Celery worker
-            # search_params['screenshot_path'] = file_path
-            search_params['screenshot_name'] = screenshot_file.name
-            # A better way for Celery: pass the file content if small, or save to shared storage (S3)
-            # and pass the key. For now, this is a placeholder.
-            print(f"Received screenshot: {screenshot_file.name}, size: {screenshot_file.size}")
-
-
-        # --- Simulate Celery Task ---
-        # from backend.tasks import process_video_search_task # Make sure to define this task
-        # process_video_search_task.delay(task_id, search_params)
-        print(f"Search task {task_id} initiated with params: {search_params}")
-        # --- End Simulation ---
-
-        return Response({'task_id': task_id, 'status': 'pending'}, status=status.HTTP_202_ACCEPTED)
+        # Basic validation for image if provided
+        image_ref = None
+        image_fingerprint = None # You'd generate this later
+        if query_image:
+            # For now, just save the image temporarily. In production, use S3 or similar.
+            # Ensure MEDIA_ROOT is configured in settings.py
+            # And that the 'media' directory exists at your project root or specified path.
+            temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_query_images')
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Generate a unique filename
+            ext = query_image.name.split('.')[-1]
+            unique_filename = f"{uuid.uuid4()}.{ext}"
+            image_path = os.path.join(temp_dir, unique_filename)
+            
+            try:
+                with open(image_path, 'wb+') as destination:
+                    for chunk in query_image.chunks():
+                        destination.write(chunk)
+                image_ref = image_path # Store the path as a reference
+                # Here you would also ideally generate an image_fingerprint (e.g., pHash)
+            except Exception as e:
+                return Response({"error": f"Could not save query image: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class SearchStatusView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+        user = request.user if request.user.is_authenticated else None
+        session_id = request.session.session_key
+        if not session_id and not user: # Ensure session is created for anon users
+            request.session.save()
+            session_id = request.session.session_key
+
+        search_task = SearchTask.objects.create(
+            user=user,
+            session_id=session_id,
+            query_text=query_text,
+            query_image_ref=image_ref,
+            # query_image_fingerprint=image_fingerprint, # Add once fingerprinting is implemented
+            applied_filters_json=filters_json,
+            status='pending'
+        )
+
+        # ---- TRIGGER CELERY TASK ----
+        # process_search_query.delay(search_task.id)
+        # For now, we'll simulate completion or just return the task ID.
+        # When Celery is set up, uncomment the line above.
+        # For testing without Celery immediately:
+        # search_task.status = 'processing' # or 'completed' if simulating
+        # search_task.save()
+        # ----------------------------
+
+        serializer = SearchTaskSerializer(search_task)
+        return Response(serializer.data, status=status.HTTP_202_ACCEPTED) # 202 Accepted as it's async
+
+class SearchStatusView(views.APIView):
+    """
+    Retrieves the status and basic details of a specific search task.
+    """
+    permission_classes = [AllowAny] # Or more restrictive if needed
 
     def get(self, request, task_id, *args, **kwargs):
-        # TODO: Query your task management system (e.g., Celery results backend) for status
-        # For simulation:
-        import random
-        simulated_statuses = ['pending', 'processing', 'completed', 'failed']
-        current_status = random.choice(simulated_statuses) # Simulate
+        try:
+            task_id_uuid = uuid.UUID(task_id) # Ensure task_id is a valid UUID
+            search_task = get_object_or_404(SearchTask, id=task_id_uuid)
+            
+            # Security check: Ensure the user requesting status is either the owner or it's an anonymous task
+            # This logic might need refinement based on your exact auth requirements for viewing tasks
+            is_owner = request.user.is_authenticated and search_task.user == request.user
+            is_session_owner = not request.user.is_authenticated and search_task.session_id == request.session.session_key
+            
+            if not (is_owner or is_session_owner or search_task.user is None): # Allow if task is fully anonymous (no user, relies on session)
+                 # If the task has a user and the current request user doesn't match, AND
+                 # if the task has a session_id and the current request session doesn't match (or user is auth'd but it's not their task)
+                if search_task.user or (not request.user.is_authenticated and search_task.session_id != request.session.session_key):
+                    return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
-        if current_status == 'completed':
-             # In a real app, you'd check if results are actually ready in DB
-            return Response({'task_id': task_id, 'status': 'completed', 'message': 'Search complete.'})
-        elif current_status == 'failed':
-            return Response({'task_id': task_id, 'status': 'failed', 'error': 'Search task failed.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        else:
-            return Response({'task_id': task_id, 'status': current_status})
+            serializer = SearchTaskSerializer(search_task)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except ValueError:
+            return Response({"error": "Invalid task_id format."}, status=status.HTTP_400_BAD_REQUEST)
+        except SearchTask.DoesNotExist: # Handled by get_object_or_404 but explicit for clarity
+            return Response({"error": "Search task not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
-class SearchResultsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class SearchResultsView(views.APIView):
+    """
+    Retrieves the results for a completed search task.
+    Actual results will be fetched by the Celery task and associated with the SearchTask.
+    This view will then query those associated results (e.g., from VideoSource or a dedicated SearchTaskResult model).
+    """
+    permission_classes = [AllowAny] # Or more restrictive
 
     def get(self, request, task_id, *args, **kwargs):
-        # TODO: Fetch actual results from database associated with task_id
-        # For simulation:
-        simulated_results = [
-            {
-                'id': 'vid1', 'title': 'Funny Cat Video Compilation', 'source': 'YouTube',
-                'thumbnail_url': 'https://i.ytimg.com/vi/example1/hqdefault.jpg',
-                'url': 'https://www.youtube.com/watch?v=example1',
-                'description_snippet': 'A hilarious compilation of cats doing funny things...',
-                'timestamp': '01:23', # If specific moment found
-                'relevance_score': 0.95
-            },
-            {
-                'id': 'vid2', 'title': 'Amazing Drone Footage of Mountains', 'source': 'Vimeo',
-                'thumbnail_url': 'https://vumbnail.com/example2.jpg',
-                'url': 'https://vimeo.com/example2',
-                'description_snippet': 'Breathtaking aerial views captured by a drone...',
-                'relevance_score': 0.88
-            }
-        ]
-        return Response({'task_id': task_id, 'results': simulated_results})
+        try:
+            task_id_uuid = uuid.UUID(task_id)
+            search_task = get_object_or_404(SearchTask, id=task_id_uuid)
+
+            # Similar ownership/permission check as in SearchStatusView
+            is_owner = request.user.is_authenticated and search_task.user == request.user
+            is_session_owner = not request.user.is_authenticated and search_task.session_id == request.session.session_key
+            
+            if not (is_owner or is_session_owner or search_task.user is None):
+                if search_task.user or (not request.user.is_authenticated and search_task.session_id != request.session.session_key):
+                    return Response({"error": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+            if search_task.status not in ['completed', 'partial_results']:
+                return Response(
+                    {"error": "Search is not yet complete.", "status": search_task.status},
+                    status=status.HTTP_202_ACCEPTED # Or 400 if you prefer to indicate it's not ready
+                )
+
+            # --- Placeholder for fetching actual results ---
+            # This is where you would query VideoSource or a SearchTaskResult model
+            # based on how the Celery task stores the results linked to 'search_task.id'.
+            # For now, let's return a dummy response.
+            #
+            # Example:
+            # results = VideoSource.objects.filter(some_relation_to_search_task=search_task)
+            # results_serializer = VideoSourceSerializer(results, many=True)
+            # return Response({
+            #     "task_info": SearchTaskSerializer(search_task).data,
+            #     "results": results_serializer.data
+            # }, status=status.HTTP_200_OK)
+            # --- End Placeholder ---
+
+            return Response({
+                "message": "Results would be here.",
+                "task_id": str(search_task.id),
+                "status": search_task.status,
+                "query": search_task.query_text or search_task.query_image_ref,
+                "results_data": [] # Replace with actual results data later
+            }, status=status.HTTP_200_OK)
+
+        except ValueError:
+            return Response({"error": "Invalid task_id format."}, status=status.HTTP_400_BAD_REQUEST)
+        except SearchTask.DoesNotExist:
+            return Response({"error": "Search task not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+# --- Signup Code / Account Activation Views (from previous discussion) ---
+class VerifySignupCodeView(views.APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        code = request.data.get('code')
+        if not code:
+            return Response({"error": "Code not provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            signup_code = SignupCode.objects.get(code=code, is_used=False)
+            if signup_code.expires_at and signup_code.expires_at < timezone.now():
+                return Response({"error": "Code has expired."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Valid code, return success (but don't mark as used yet)
+            # You might want to include the email or plan associated if needed by frontend
+            serializer = SignupCodeSerializer(signup_code)
+            return Response({"message": "Code is valid.", "data": serializer.data}, status=status.HTTP_200_OK)
+        except SignupCode.DoesNotExist:
+            return Response({"error": "Invalid or already used code."}, status=status.HTTP_404_NOT_FOUND)
+
+class ActivateAccountWithCodeView(views.APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = ActivateAccountSerializer(data=request.data)
+        if serializer.is_valid():
+            code_text = serializer.validated_data['code']
+            email = serializer.validated_data['email'] # This should match the code's email
+            password = serializer.validated_data['password']
+            # Optional: first_name, last_name from serializer.validated_data
+
+            try:
+                signup_code = SignupCode.objects.get(code=code_text, email__iexact=email, is_used=False)
+
+                if signup_code.expires_at and signup_code.expires_at < timezone.now():
+                    return Response({"error": "Signup code has expired."}, status=status.HTTP_400_BAD_REQUEST)
+
+                if User.objects.filter(email__iexact=email).exists():
+                    return Response({"error": "An account with this email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Create user
+                user = User.objects.create_user(
+                    username=email, # Using email as username for simplicity with allauth
+                    email=email,
+                    password=password,
+                    first_name=serializer.validated_data.get('first_name', ''),
+                    last_name=serializer.validated_data.get('last_name', '')
+                )
+                user.is_active = True # Activate the user
+                user.save()
+
+                # Mark code as used
+                signup_code.is_used = True
+                signup_code.user_activated = user
+                signup_code.save()
+                
+                # Optionally log the user in immediately (django.contrib.auth.login)
+                # Or return a success message for the frontend to handle login flow
+
+                return Response({
+                    "message": "Account activated successfully. You can now log in.",
+                    "user": UserSerializer(user).data # Return basic user info
+                }, status=status.HTTP_201_CREATED)
+
+            except SignupCode.DoesNotExist:
+                return Response({"error": "Invalid signup code or email mismatch for the code."}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e: # Catch other potential errors
+                return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
