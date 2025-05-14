@@ -35,3 +35,8 @@ urlpatterns = [
     # Example for ViewSet if you use it later:
     # path('', include(router.urls)),
 ]
+
+# backend/api/urls.py (example)
+# ... other url patterns
+from .views import papri_app_view
+path('app/', papri_app_view, name='papri_app_home'),
