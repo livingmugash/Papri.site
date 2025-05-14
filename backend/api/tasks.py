@@ -5,88 +5,109 @@ from django.utils import timezone
 import time # For simulating work
 from .models import SearchTask #, Video, VideoSource, Transcript, etc. - import as needed by the task
 from backend.ai_agents.main_orchestrator import PapriAIAgentOrchestrator # Assuming orchestrator is in backend/ai_agents
+from django.conf import settings
 import subprocess
 import tempfile
+from api.models import VideoSource # Assuming models are in api.models
+from .analyzer_instances import visual_analyzer_instance # Using a shared instance
 
-@shared_task(bind=True, name='api.index_video_visual_features', acks_late=True, time_limit=1800) # Added acks_late and time_limit
+# Create backend/api/analyzer_instances.py:
+# from backend.ai_agents.visual_analyzer import VisualAnalyzer
+# visual_analyzer_instance = VisualAnalyzer() # Instantiate once
+# T
+
+@shared_task(bind=True, name='api.index_video_visual_features', acks_late=True, time_limit=1800, max_retries=1)
 def index_video_visual_features(self, video_source_id):
-    print(f"Celery Task: Starting visual feature indexing for VideoSource ID {video_source_id}")
+    print(f"Celery VisualIndex: Starting for VSID {video_source_id}")
     try:
         video_source = VideoSource.objects.select_related('video').get(id=video_source_id)
         if not video_source.video:
-            # ... (handle error: not linked to Papri Video) ...
-            return {"status": "skipped", "reason": "Not linked to Papri Video"}
+            print(f"Celery VisualIndex: VSID {video_source_id} not linked to a Papri Video. Skipping.")
+            # Optionally update a status on video_source to prevent retries for this reason
+            return {"status": "skipped_no_papri_video_link"}
+        if not video_source.original_url:
+            print(f"Celery VisualIndex: VSID {video_source_id} has no original_url. Skipping.")
+            return {"status": "skipped_no_original_url"}
 
         video_url = video_source.original_url
-        with tempfile.TemporaryDirectory(prefix="papri_vid_dl_", dir=settings.MEDIA_ROOT) as tmpdir_path: # Use MEDIA_ROOT for temp
-            # Ensure tmpdir_path is accessible by Celery worker
-            # Using a smaller video format for faster processing during indexing.
-            # Consider 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]'
-            # Or 'worstvideo[ext=mp4]' if speed is paramount and visual quality for indexing can be lower.
-            # --restrict-filenames for safer filenames.
-            output_template = os.path.join(tmpdir_path, "%(id)s.%(ext)s") # Use video ID from platform as filename
+        
+        # Create a temporary directory within MEDIA_ROOT if possible for easier cleanup/management
+        # Ensure MEDIA_ROOT is writable by Celery worker.
+        # Fallback to system temp if MEDIA_ROOT is not suitable or configured.
+        temp_download_basedir = os.path.join(settings.MEDIA_ROOT, "temp_video_downloads")
+        os.makedirs(temp_download_basedir, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(prefix=f"papri_dl_{video_source_id}_", dir=temp_download_basedir) as tmpdir_path:
+            output_template = os.path.join(tmpdir_path, f"{video_source.platform_video_id or video_source_id}.%(ext)s")
             
-            # yt-dlp options:
-            # - Slower but more compatible: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4'
-            # - Faster for processing: 'worstvideo[ext=mp4][height<=360]' (small, fast)
-            # - Limit duration for testing: '--download-sections', '*0-2:00' (first 2 minutes)
+            # Refined yt-dlp options
             ydl_opts = [
-                '-f', 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]/mp4', # Prefer mp4, up to 480p
+                '-f', 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]/mp4',
                 '--output', output_template,
-                '--no-playlist',
-                '--max-filesize', '200M', # Max 200MB download
-                '--socket-timeout', '30', # Timeout for connections
-                # '--retries', '3', # Number of retries
-                '--fragment-retries', '3',
-                '--restrict-filenames', # For safer filenames
-                '--progress', # Show progress from yt-dlp
-                # '--download-sections', '*0-3:00', # Example: only first 3 minutes
-                '--extractor-args', 'youtube:player_client=web', # Helps with some YouTube downloads
+                '--no-playlist', '--max-filesize', '250M', # Increased slightly
+                '--socket-timeout', '60', '--retries', '2', '--fragment-retries', '2',
+                '--restrict-filenames', '--no-warnings', # Suppress yt-dlp warnings if too noisy
+                '--extractor-args', 'youtube:player_client=web;youtube:skip=hls,dash', # Try to force progressive for YT
+                # '--verbose' # For extreme debugging of yt-dlp
             ]
-            print(f"VisualIndexTask: Downloading {video_url} with yt-dlp opts: {' '.join(ydl_opts)}")
+            print(f"Celery VisualIndex: Downloading {video_url} with yt-dlp...")
             
-            process = subprocess.run(['yt-dlp'] + ydl_opts + [video_url], capture_output=True, text=True, check=False, encoding='utf-8')
+            process = subprocess.run(['yt-dlp'] + ydl_opts + [video_url], capture_output=True, text=True, check=False, encoding='utf-8', errors='ignore')
 
             downloaded_file_path = None
             if process.returncode == 0:
-                # Try to find the file based on platform_video_id
-                # yt-dlp output template uses %(id)s which is platform_video_id
-                expected_filename_base = video_source.platform_video_id
-                for f_name in os.listdir(tmpdir_path):
-                    if f_name.startswith(expected_filename_base):
+                # Find the downloaded file, yt-dlp might slightly alter filename based on title if %(id)s not unique enough
+                for f_name in sorted(os.listdir(tmpdir_path)): # Sort to get a predictable first if multiple (shouldn't happen with good template)
+                    if any(f_name.endswith(ext) for ext in ['.mp4', '.mkv', '.webm', '.avi', '.mov']):
                         downloaded_file_path = os.path.join(tmpdir_path, f_name)
                         break
-                if not downloaded_file_path: # Fallback if filename pattern is different
-                     for f_name in os.listdir(tmpdir_path): # Find first video-like file
-                        if any(f_name.endswith(ext) for ext in ['.mp4', '.mkv', '.webm', '.mov', '.avi']):
-                            downloaded_file_path = os.path.join(tmpdir_path, f_name)
-                            break
                 if downloaded_file_path:
-                    print(f"VisualIndexTask: Downloaded to {downloaded_file_path}. Size: {os.path.getsize(downloaded_file_path)} bytes.")
-                else:
-                    print(f"VisualIndexTask: yt-dlp success but could not find downloaded file. stdout: {process.stdout}, stderr: {process.stderr}")
-                    return {"status": "failed_download", "error": "Downloaded file not found after successful download."}
-            else:
-                print(f"VisualIndexTask: yt-dlp failed for {video_url}. ReturnCode: {process.returncode}. Error: {process.stderr[-500:]}. Stdout: {process.stdout[-500:]}")
-                # Log failure for this video_source if needed
-                return {"status": "failed_download", "error": process.stderr[-500:]} # Store last 500 chars of error
+                    print(f"Celery VisualIndex: Downloaded to {downloaded_file_path}. Size: {os.path.getsize(downloaded_file_path)} bytes.")
+                else: # yt-dlp said success but file not found
+                    print(f"Celery VisualIndex: yt-dlp success (code 0) but downloaded file not found in {tmpdir_path}. stdout: {process.stdout[-1000:]}")
+                    # Try to list files for debugging
+                    print(f"Files in tmpdir: {os.listdir(tmpdir_path)}")
+                    return {"status": "failed_download_file_missing", "error": "Downloaded file not found post-yt-dlp."}
+            else: # yt-dlp failed
+                error_output = f"yt-dlp failed (code {process.returncode}).\nStderr: {process.stderr[-1000:]}\nStdout: {process.stdout[-1000:]}"
+                print(f"Celery VisualIndex: {error_output}")
+                # Update VideoSource with failure status
+                video_source.meta_visual_processing_status = 'download_failed' # Add this field to VideoSource model
+                video_source.meta_visual_processing_error = error_output[:500]
+                video_source.save(update_fields=['meta_visual_processing_status', 'meta_visual_processing_error'])
+                return {"status": "failed_download", "error": error_output}
 
-            analyzer = VisualAnalyzer()
-            result = analyzer.index_video_frames(video_source, downloaded_file_path)
+            # Call VisualAnalyzer using the shared instance
+            # This analyzer_instances.py pattern is good for heavy objects in Celery.
+            result = visual_analyzer_instance.index_video_frames(video_source, downloaded_file_path)
             
-            # Cleanup: The TemporaryDirectory context manager handles directory removal.
-            print(f"VisualIndexTask: VisualAnalyzer result for {video_source_id}: {result}")
-            # Update video_source status: e.g., video_source.visual_indexing_status = 'completed' / 'failed'
-            # video_source.last_visual_indexed_at = timezone.now()
-            # video_source.save()
-            return {"status": "completed_visual_indexing", "result": result}
+            print(f"Celery VisualIndex: VisualAnalyzer result for {video_source_id}: {result}")
+            if result.get("error"):
+                video_source.meta_visual_processing_status = 'analysis_failed'
+                video_source.meta_visual_processing_error = result["error"][:500]
+            else:
+                video_source.meta_visual_processing_status = 'completed'
+                video_source.meta_visual_processing_error = None # Clear previous errors
+                video_source.last_visual_indexed_at = timezone.now() # Add this field to VideoSource
+            video_source.save()
 
-    except VideoSource.DoesNotExist: # ... (error handling)
-        return {"status": "error", "reason": "VideoSource not found"}
-    except Exception as e: # ... (error handling)
-        # Log the full traceback for unexpected errors
+            return {"status": video_source.meta_visual_processing_status, "result": result}
+            # TemporaryDirectory context manager handles cleanup of tmpdir_path
+
+    except VideoSource.DoesNotExist:
+        print(f"Celery VisualIndex: VSID {video_source_id} not found.")
+        return {"status": "error_vs_not_found"}
+    except Exception as e:
         import traceback
-        print(f"VisualIndexTask: UNEXPECTED error processing video {video_source_id}: {e}\n{traceback.format_exc()}")
+        error_full = f"UNEXPECTED error processing VSID {video_source_id}: {e}\n{traceback.format_exc()}"
+        print(error_full)
+        try: # Attempt to mark VideoSource as failed if possible
+            vs_on_error = VideoSource.objects.get(id=video_source_id)
+            vs_on_error.meta_visual_processing_status = 'error_unexpected'
+            vs_on_error.meta_visual_processing_error = str(e)[:500]
+            vs_on_error.save()
+        except: pass # Ignore if can't update status
+        # self.retry(exc=e, countdown=60*5, max_retries=2) # Retry for unexpected errors
         return {"status": "error_unexpected", "reason": str(e)}
 
 
