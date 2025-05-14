@@ -60,11 +60,21 @@ class PapriAIAgentOrchestrator:
             print(f"Orchestrator: SOI Agent fetched {len(raw_video_data_from_sources)} raw items.")
 
             # 3. Content Analysis (CAAgent) - Placeholder for now
-            # analyzed_content = self.ca_agent.analyze_content(raw_video_data_from_sources, processed_query_data)
-            # For now, let's assume raw_video_data_from_sources is what we'll try to save/rank.
-            # This means we're doing a basic metadata search first. Transcript/Image analysis comes next.
-            analyzed_content = raw_video_data_from_sources # Direct pass-through for initial implementation
-
+           all_analysis_data = {} # Stores output from CAAgent, keyed by video_source_obj.id
+        if persisted_video_source_objects:
+            for video_source_obj in persisted_video_source_objects:
+                raw_data_item_for_source = next(
+                    (item for item in raw_video_data_from_sources if item.get('original_url') == video_source_obj.original_url), None
+                )
+                if video_source_obj and raw_data_item_for_source: # raw_data_item needed for platforms without direct transcript API
+                    try:
+                        analysis_output = self.ca_agent.analyze_video_content(video_source_obj, raw_data_item_for_source)
+                        if analysis_output:
+                            all_analysis_data[video_source_obj.id] = analysis_output
+                    except Exception as e:
+                        print(f"Orchestrator: Error calling CAAgent for source {video_source_obj.id}: {e}")
+        print(f"Orchestrator: Content Analysis completed. Processed {len(all_analysis_data)} sources for analysis.")
+        
             # 4. Aggregate and Rank Results (RARAgent) - Placeholder for now
             # ranked_results = self.rar_agent.aggregate_and_rank(analyzed_content, processed_query_data)
             # For now, simple ranking or just passing through
@@ -74,22 +84,118 @@ class PapriAIAgentOrchestrator:
             print(f"Orchestrator: Saved/Updated {len(saved_video_sources)} video sources to DB.")
 
             # The RARAgent would produce the final list of Video objects (or their IDs) to be returned.
-            # For now, let's just return the saved_video_sources as a proxy for ranked_results.
-            # This would actually be a list of serialized Video data.
-            final_results_for_response = [
-                {
-                    "id": vs.video.id,
-                    "title": vs.video.title,
-                    "description": vs.video.description,
-                    "publication_date": vs.video.publication_date.isoformat() if vs.video.publication_date else None,
-                    "primary_thumbnail_url": vs.video.primary_thumbnail_url,
-                    "sources": [{
-                        "platform_name": vs.platform_name,
-                        "original_url": vs.original_url,
-                        "embed_url": vs.embed_url
-                    }]
-                } for vs in saved_video_sources
-            ]
+             ranked_papri_video_ids = []
+        if persisted_video_source_objects: # Pass the Django objects
+            try:
+                # RARAgent needs the query keywords and the analysis data (which contains extracted keywords)
+                ranked_papri_video_ids = self.ra_agent.aggregate_and_rank_results(
+                    persisted_video_source_objects, 
+                    processed_query_data,
+                    all_analysis_data 
+                )
+                print(f"Orchestrator: RARAgent returned {len(ranked_papri_video_ids)} ranked Papri Video IDs.")
+            except Exception as e:
+                print(f"Orchestrator: Error in Result Aggregation Agent: {e}")
+                # Fallback: use unranked IDs if ranking fails
+                ranked_papri_video_ids = [vs_obj.video.id for vs_obj in persisted_video_source_objects if vs_obj.video]
+        else: # No sources fetched or persisted
+             print(f"Orchestrator: No persisted video sources to rank.")
+
+
+        return {
+            "message": "Search, analysis, and ranking orchestrated.",
+            "items_processed_from_sources": len(raw_video_data_from_sources),
+            "items_analyzed_for_content": len(all_analysis_data),
+            "persisted_video_ids": ranked_papri_video_ids, # Return RANKED Papri Video IDs
+        }
+
+    @transaction.atomic
+    def _persist_basic_video_info(self, video_data_list):
+        # ... (This method remains the same as defined in the previous step)
+        # It returns a list of VideoSource Django model instances.
+        created_or_updated_sources = []
+        for item_data in video_data_list:
+            original_url = item_data.get('original_url')
+            if not original_url: continue
+
+            platform_name = item_data.get('platform_name')
+            platform_video_id = item_data.get('platform_video_id')
+            if not platform_name or not platform_video_id: continue
+
+            video_source, source_created = VideoSource.objects.get_or_create(
+                original_url=original_url,
+                defaults={
+                    'platform_name': platform_name,
+                    'platform_video_id': platform_video_id,
+                }
+            )
+
+            papri_video = video_source.video
+            video_is_newly_associated = False
+            if not papri_video:
+                # Simplified Video creation/linking. Needs robust de-duplication strategy for Video model later.
+                # For now, create a new Video if no existing one is linked to this source,
+                # or if creating one based on title (or other de-dupe key) doesn't find one.
+                # This might lead to multiple Papri Video objects for the same conceptual video if it appears
+                # on different sources with slightly different metadata.
+                # A proper deduplication_hash on Video model is crucial here.
+                temp_title = item_data.get('title', 'Untitled Video')
+                
+                # Attempt to find by a potential deduplication_hash if SOIAgent could provide one
+                # For now, this is a simplification and might create duplicate Video entries.
+                video_defaults = {
+                    'description': item_data.get('description'),
+                    'duration_seconds': item_data.get('duration_seconds'),
+                    'primary_thumbnail_url': item_data.get('thumbnail_url'),
+                }
+                pub_date_str_defaults = item_data.get('publication_date')
+                if pub_date_str_defaults:
+                    try: video_defaults['publication_date'] = timezone.datetime.fromisoformat(pub_date_str_defaults.replace('Z', '+00:00'))
+                    except ValueError:
+                        try: video_defaults['publication_date'] = timezone.datetime.strptime(pub_date_str_defaults, "%Y-%m-%dT%H:%M:%S.%fZ")
+                        except ValueError: pass # Silently ignore if date format is unparseable for defaults
+
+                papri_video, video_created = Video.objects.get_or_create(
+                    title=temp_title, # Using title as a weak de-dupe key for Video object for now.
+                                      # This IS NOT ROBUST. Replace with a proper deduplication_hash.
+                    defaults=video_defaults
+                )
+                if video_created:
+                    print(f"Orchestrator Persist: Created NEW Papri Video ID: {papri_video.id} for title '{papri_video.title}'")
+                video_source.video = papri_video # Link source to this video
+                video_is_newly_associated = True
+
+
+            # Update Video fields (idempotently)
+            papri_video.title = item_data.get('title') or papri_video.title # Ensure title is set
+            papri_video.description = item_data.get('description') or papri_video.description
+            papri_video.duration_seconds = item_data.get('duration_seconds') or papri_video.duration_seconds
+            papri_video.primary_thumbnail_url = item_data.get('thumbnail_url') or papri_video.primary_thumbnail_url
+            pub_date_str = item_data.get('publication_date')
+            current_pub_date = papri_video.publication_date
+            if pub_date_str:
+                try: new_pub_date = timezone.datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
+                except ValueError:
+                    try: new_pub_date = timezone.datetime.strptime(pub_date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+                    except ValueError: new_pub_date = None; print(f"Could not parse publication_date: {pub_date_str}")
+                if new_pub_date and (not current_pub_date or new_pub_date != current_pub_date) : # Check before assigning
+                    papri_video.publication_date = new_pub_date
+            papri_video.save()
+
+            # Update VideoSource fields
+            video_source.platform_name = platform_name 
+            video_source.platform_video_id = platform_video_id
+            video_source.embed_url = item_data.get('embed_url')
+            video_source.source_metadata_json = item_data 
+            video_source.last_scraped_at = timezone.now()
+            if video_is_newly_associated: # Save if video was just linked
+                 video_source.save()
+            else: # Else, save only if there were other changes to video_source itself
+                 video_source.save(update_fields=['platform_name', 'platform_video_id', 'embed_url', 'source_metadata_json', 'last_scraped_at'])
+
+            created_or_updated_sources.append(video_source)
+        
+        return created_or_updated_sources
 
 
             # Update search task with a summary (e.g., number of results)
@@ -248,15 +354,28 @@ class PapriAIAgentOrchestrator:
             # For now, we won't fetch from external sources for pure image search via this path.
             # This will primarily search our own indexed visual features.
 
-        # 3. Content Analysis (Stubbed for now)
-        # In a real scenario, CAAgent would process raw_video_data_from_sources:
-        # - Fetch and analyze transcripts.
-        # - Fetch and analyze video frames (if needed for re-ranking or matching).
-        # - Extract keywords, topics, embeddings, visual features.
-        # For now, we'll mostly use the metadata fetched by SOAgent.
-        analyzed_content_data = raw_video_data_from_sources # Pass through for now
-        print(f"Orchestrator: Content Analysis (stubbed) - passing through {len(analyzed_content_data)} items.")
+     persisted_video_source_objects = []
+        if raw_video_data_from_sources:
+            persisted_video_source_objects = self._persist_basic_video_info(raw_video_data_from_sources)
+            print(f"Orchestrator: Persisted basic info for {len(persisted_video_source_objects)} video sources.")
 
+
+        # 3. Content Analysis (Stubbed for now)
+       all_analysis_data = {} # Stores output from CAAgent, keyed by video_source_obj.id
+        if persisted_video_source_objects:
+            for video_source_obj in persisted_video_source_objects:
+                raw_data_item_for_source = next(
+                    (item for item in raw_video_data_from_sources if item.get('original_url') == video_source_obj.original_url), None
+                )
+                if video_source_obj and raw_data_item_for_source: # raw_data_item needed for platforms without direct transcript API
+                    try:
+                        analysis_output = self.ca_agent.analyze_video_content(video_source_obj, raw_data_item_for_source)
+                        if analysis_output:
+                            all_analysis_data[video_source_obj.id] = analysis_output
+                    except Exception as e:
+                        print(f"Orchestrator: Error calling CAAgent for source {video_source_obj.id}: {e}")
+        print(f"Orchestrator: Content Analysis completed. Processed {len(all_analysis_data)} sources for analysis.")
+        
 
         # 4. Result Aggregation & Ranking (Simplified for now)
         # RA Agent would:
