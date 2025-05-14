@@ -9,13 +9,15 @@ import numpy as np
 from PIL import Image as PILImage
 import imagehash # For perceptual hashing
 import os
-from scenedetect import VideoManager, SceneManager
-from scenedetect.detectors import ContentDetector # For scene change detection
 from scenedetect.scene_manager import save_images # To save keyframes easily
-import tempfile # To handle temporary image files from keyframes
 from qdrant_client import QdrantClient, models as qdrant_models
 from django.conf import settings
-
+from scenedetect import VideoManager, SceneManager, StatsManager # Added StatsManager
+from scenedetect.detectors import ContentDetector 
+from scenedetect.video_splitter import split_video_ffmpeg # For frame extraction by number if needed
+from scenedetect.frame_time_code import FrameTimecode # For timestamp calculations
+import tempfile 
+import shutil # For cleaning up temp images if save_images is used
 
 class VisualAnalyzer:
     def __init__(self):
@@ -214,93 +216,175 @@ class VisualAnalyzer:
     # --- Methods for Video Frame Indexing (to be called by CAAgent) ---
     # These are more complex and will be developed iteratively.
 
-   def _extract_key_frames_from_video(self, video_file_path, threshold=27.0, min_scene_len=15, downscale_factor=0):
+def _extract_key_frames_from_video(self, video_file_path, threshold=27.0, min_scene_len_frames=15, downscale_factor=0):
         """
         Uses PySceneDetect to find scene changes and extract keyframes (middle frame of each scene).
         Returns a list of tuples: (PIL.Image object for keyframe, timestamp_ms).
-        
-        video_file_path: Path to the video file.
-        threshold: Threshold for ContentDetector (lower means more sensitive to changes).
-        min_scene_len: Minimum length of a scene in frames.
-        downscale_factor: Amount to downscale video during processing (0 for none, 1 for 50%, 2 for 25%, etc.).
-                         Higher values speed up processing but reduce accuracy.
         """
-        print(f"VisualAnalyzer: Extracting keyframes from video: {video_file_path} (threshold: {threshold})")
+        print(f"VA Keyframe: Processing video: {video_file_path} (Threshold: {threshold}, MinLenFrames: {min_scene_len_frames})")
         keyframes_with_timestamps = []
+        video_manager = None # Initialize to None for finally block
+        
         try:
-            video_manager = VideoManager([video_file_path])
+            # Create a video_manager object. Passing StatsManager for detailed analysis if needed later.
+            stats_file_path = os.path.join(tempfile.gettempdir(), f"{os.path.basename(video_file_path)}.stats.csv") # Optional stats file
+            video_manager = VideoManager([video_file_path],ഹൃദയംstats_manager=StatsManager(stats_file_path=stats_file_path, save_on_shutdown=True))
+            
             scene_manager = SceneManager()
-            scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
+            scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len_frames))
 
-            base_timecode = video_manager.get_base_timecode() # Important for correct timestamps
+            base_timecode = video_manager.get_base_timecode()
 
-            if downscale_factor > 0:
+            if downscale_factor > 0 and isinstance(downscale_factor, int):
                 video_manager.set_downscale_factor(downscale_factor)
             
-            video_manager.start() # Start video processing
-            scene_manager.detect_scenes(frame_source=video_manager, show_progress=False) # show_progress=True for console progress
-            scene_list = scene_manager.get_scene_list(base_timecode) 
-            # scene_list contains tuples of (StartTimecode, EndTimecode)
+            video_manager.start() # This opens the video file
+            print(f"VA Keyframe: Video '{video_file_path}' opened. Duration: {video_manager.get_duration()[1].get_timecode()}, FPS: {video_manager.get_framerate()}")
 
-            print(f"VisualAnalyzer: Detected {len(scene_list)} scenes in '{video_file_path}'.")
+            scene_manager.detect_scenes(frame_source=video_manager, show_progress=False)
+            scene_list = scene_manager.get_scene_list(base_timecode)
+            
+            print(f"VA Keyframe: Detected {len(scene_list)} scenes in '{video_file_path}'.")
 
-            if not scene_list: # Handle videos with no detectable scenes (or very short videos)
-                # Get a frame from the middle of the video as a single keyframe
-                duration_frames = video_manager.get_duration()[0].get_frames() # Total frames
+            if not scene_list:
+                duration_frames = video_manager.get_duration()[0].get_frames()
                 if duration_frames > 0:
                     middle_frame_num = duration_frames // 2
-                    video_manager.seek(middle_frame_num)
-                    frame_img_np = video_manager.read() # Reads the current frame as numpy array
-                    if frame_img_np is not False: # Check if frame was read successfully
-                        pil_img = PILImage.fromarray(frame_img_np)
-                        timestamp_ms = int((middle_frame_num / video_manager.get_framerate()) * 1000)
-                        keyframes_with_timestamps.append((pil_img, timestamp_ms))
-                        print(f"VisualAnalyzer: No scenes detected, using middle frame {middle_frame_num} (ts: {timestamp_ms}ms) as keyframe.")
-                else:
-                    print(f"VisualAnalyzer: Video has 0 duration or could not read middle frame: {video_file_path}")
-
-
-            # For each detected scene, extract the middle frame as a keyframe
-            # PySceneDetect's save_images can also be used for more complex keyframe selection per scene
-            # but getting the middle frame manually gives more control for direct PIL image use.
-            for i, (start_time, end_time) in enumerate(scene_list):
-                # Get middle frame number of the current scene
-                middle_frame_num = start_time.get_frames() + ( (end_time.get_frames() - start_time.get_frames()) // 2 )
-                
-                video_manager.seek(middle_frame_num) # Seek to the frame
-                frame_img_np = video_manager.read()  # Read the frame as a numpy array (BGR format usually)
-
-                if frame_img_np is not False: # If frame was read successfully
-                    # Convert BGR (OpenCV default) to RGB for PIL
-                    frame_img_rgb_np = frame_img_np[:, :, ::-1].copy() # BGR to RGB
-                    pil_img = PILImage.fromarray(frame_img_rgb_np)
-                    timestamp_ms = int(middle_frame_num / video_manager.get_framerate() * 1000)
-                    keyframes_with_timestamps.append((pil_img, timestamp_ms))
-                    # print(f"  Scene {i+1}: Middle frame {middle_frame_num} extracted (Timestamp: {timestamp_ms}ms).")
-                else:
-                    print(f"  Scene {i+1}: Could not read middle frame {middle_frame_num}.")
+                    if video_manager.seek(middle_frame_num) == 0: # seek returns 0 on success
+                        frame_img_np = video_manager.read()
+                        if frame_img_np is not False:
+                            pil_img = PILImage.fromarray(frame_img_np[:, :, ::-1].copy()) # BGR to RGB
+                            timestamp_ms = int(FrameTimecode(middle_frame_num, base_timecode).get_seconds() * 1000)
+                            keyframes_with_timestamps.append((pil_img, timestamp_ms))
+                            print(f"VA Keyframe: No scenes, using middle frame {middle_frame_num} (ts: {timestamp_ms}ms).")
+                        else: print(f"VA Keyframe: Could not read middle frame {middle_frame_num}.")
+                    else: print(f"VA Keyframe: Could not seek to middle frame {middle_frame_num}.")
+                else: print(f"VA Keyframe: Video has 0 duration or cannot determine middle frame: {video_file_path}")
+            else:
+                # Extract middle frame of each scene
+                for i, (start_time, end_time) in enumerate(scene_list):
+                    # middle_time = start_time + ((end_time.get_frames() - start_time.get_frames()) // 2) # FrameTimecode object
+                    middle_frame_number = start_time.get_frames() + ((end_time.get_frames() - start_time.get_frames()) // 2)
+                    
+                    # Seek to the frame number
+                    if video_manager.seek(middle_frame_number) == 0: # Returns 0 on success
+                        frame_img_np = video_manager.read() # Reads the current frame
+                        if frame_img_np is not False:
+                            pil_img = PILImage.fromarray(frame_img_np[:, :, ::-1].copy()) # BGR to RGB
+                            # Get timestamp in milliseconds for this frame
+                            current_frame_timecode = FrameTimecode(middle_frame_number, base_timecode)
+                            timestamp_ms = int(current_frame_timecode.get_seconds() * 1000)
+                            keyframes_with_timestamps.append((pil_img, timestamp_ms))
+                            # print(f"  VA Keyframe: Scene {i+1}, Frame {middle_frame_number}, TS: {timestamp_ms}ms extracted.")
+                        else:
+                            print(f"  VA Keyframe: Scene {i+1}, Failed to read frame {middle_frame_number}.")
+                    else:
+                         print(f"  VA Keyframe: Scene {i+1}, Failed to seek to frame {middle_frame_number}.")
             
-            video_manager.release() # Release the video manager
-
         except Exception as e:
-            print(f"VisualAnalyzer: Error during keyframe extraction for '{video_file_path}': {e}")
-            if 'video_manager' in locals() and video_manager.is_started():
+            print(f"VA Keyframe: Error during keyframe extraction for '{video_file_path}': {type(e).__name__} - {e}")
+        finally:
+            if video_manager and video_manager.is_started():
                 video_manager.release()
-        
-        print(f"VisualAnalyzer: Extracted {len(keyframes_with_timestamps)} keyframes with timestamps for '{video_file_path}'.")
+                print(f"VA Keyframe: VideoManager released for '{video_file_path}'.")
+            if 'stats_file_path' in locals() and os.path.exists(stats_file_path): # Clean up stats file
+                try: os.remove(stats_file_path)
+                except OSError: pass
+
+        print(f"VA Keyframe: Extracted {len(keyframes_with_timestamps)} keyframes for '{video_file_path}'.")
         return keyframes_with_timestamps
 
-    def index_video_frames(self, video_source_obj, video_file_path): # Renamed param for clarity
-        from api.models import VideoFrameFeature # Local import to avoid potential early app loading issues
-        print(f"VisualAnalyzer: Starting frame indexing for VideoSource ID: {video_source_obj.id} from path: {video_file_path}")
-        
-        if not video_file_path or not os.path.exists(video_file_path):
-            print(f"VisualAnalyzer: Video file path not provided or does not exist: {video_file_path}")
-            return {"indexed_frames_count": 0, "error": "Video file not found."}
 
-        if not self.qdrant_client or not self.cnn_model or not video_source_obj.video:
-            print("VA: Qdrant client, CNN model, or linked PapriVideo not available for frame indexing.")
+    def index_video_frames(self, video_source_obj, video_file_path):
+        from api.models import VideoFrameFeature # Local import
+        print(f"VA IndexFrames: Processing VSID {video_source_obj.id} from path: {video_file_path}")
+        
+        if not video_file_path or not os.path.exists(video_file_path): # ... (error handling) ...
+            return {"indexed_frames_count": 0, "error": "Video file not found."}
+        if not self.qdrant_client or not self.cnn_model or not video_source_obj.video: # ... (error handling) ...
             return {"indexed_frames_count": 0, "error": "Client, model, or video link not ready."}
+
+        # Calculate min_scene_len in frames based on video FPS and a minimum duration in seconds (e.g., 1 second)
+        # This requires getting FPS from the video first.
+        temp_video_manager = None
+        min_scene_duration_sec = 1.0 
+        min_scene_len_frames_calculated = 15 # Default
+        try:
+            temp_video_manager = VideoManager([video_file_path])
+            temp_video_manager.start() # Just to get metadata
+            fps = temp_video_manager.get_framerate()
+            min_scene_len_frames_calculated = int(fps * min_scene_duration_sec)
+            print(f"VA IndexFrames: Calculated min_scene_len_frames: {min_scene_len_frames_calculated} (FPS: {fps})")
+        except Exception as e:
+            print(f"VA IndexFrames: Could not get FPS to calculate min_scene_len, using default. Error: {e}")
+        finally:
+            if temp_video_manager and temp_video_manager.is_started():
+                temp_video_manager.release()
+
+        keyframe_pil_images_with_timestamps = self._extract_key_frames_from_video(
+            video_file_path, 
+            threshold=27.0, # Default threshold, may need tuning
+            min_scene_len_frames=max(15, min_scene_len_frames_calculated), # Ensure at least 15 frames
+            downscale_factor=1 # Downscale by 50% for faster processing
+        )
+
+        if not keyframe_pil_images_with_timestamps: # ... (error handling) ...
+            return {"indexed_frames_count": 0, "error": "No keyframes extracted."}
+
+        indexed_count = 0
+        points_to_qdrant = []
+        processed_timestamps = set() # To avoid processing duplicate timestamps if _extract_key_frames returns any
+
+        for frame_pil_img, timestamp_ms in keyframe_pil_images_with_timestamps:
+            if timestamp_ms in processed_timestamps:
+                continue # Skip if this exact timestamp was already processed for this video
+            processed_timestamps.add(timestamp_ms)
+
+            cnn_embedding = self.extract_cnn_embedding_from_image(frame_pil_img)
+            hashes = self.generate_perceptual_hash(frame_pil_img)
+            phash_val = hashes.get('phash') if hashes else None
+            dhash_val = hashes.get('dhash') if hashes else None
+
+            if not cnn_embedding and not phash_val: continue
+
+            # Use update_or_create for VideoFrameFeature to handle re-indexing
+            vff_obj, created = VideoFrameFeature.objects.update_or_create(
+                video_source=video_source_obj,
+                timestamp_in_video_ms=timestamp_ms,
+                feature_type=self.cnn_model_name,
+                defaults={
+                    'hash_value': phash_val, 
+                    'feature_data_json': {'dhash': dhash_val} if dhash_val else {},
+                    'updated_at': timezone.now() # Explicitly set updated_at
+                }
+            )
+            # print(f"VA IndexFrames: {'Created' if created else 'Updated'} VFF ID {vff_obj.id} for VSID {video_source_obj.id} at {timestamp_ms}ms.")
+            
+            if cnn_embedding and self.qdrant_client:
+                points_to_qdrant.append(
+                    qdrant_models.PointStruct(
+                        id=vff_obj.id, vector=cnn_embedding,
+                        payload={
+                            "video_papri_id": video_source_obj.video.id,
+                            "timestamp_ms": timestamp_ms,
+                            "phash": phash_val 
+                        }
+                    )
+                )
+            indexed_count +=1
+        
+        if points_to_qdrant and self.qdrant_client:
+            try:
+                self.qdrant_client.upsert_points(
+                    collection_name=self.qdrant_visual_collection_name,
+                    points=points_to_qdrant, wait=False # Async upsert for batch
+                )
+                print(f"VA IndexFrames: Batched {len(points_to_qdrant)} frame embeddings for Qdrant upsert (VSID {video_source_obj.id}).")
+            except Exception as e:
+                print(f"VA IndexFrames: Error upserting frame embeddings to Qdrant for VSID {video_source_obj.id}: {e}")
+
+        print(f"VA IndexFrames: Processed {indexed_count} keyframes for VSID {video_source_obj.id}.")
+        return {"indexed_frames_count": indexed_count, "processed_timestamps": len(processed_timestamps)}
 
         # 1. Extract Keyframes
         # Adjust threshold and min_scene_len as needed. Lower threshold = more scenes.
