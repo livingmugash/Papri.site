@@ -18,94 +18,85 @@ class PapriAIAgentOrchestrator:
         self.ra_agent = ResultAggregationAgent()
         print(f"Orchestrator initialized for SearchTask ID: {self.papri_search_task_id}")
 
-    def execute_search(self, search_parameters):
-        print(f"Orchestrator: Executing search with params: {search_parameters}")
-        processed_query_data = None
-        raw_video_data_from_sources = []
-        
+     def execute_search(self, search_parameters):
+        # ... (Query Understanding as before, now processed_query_data can contain 'visual_features') ...
         # 1. Query Understanding
         try:
-            if search_parameters.get('query_text'):
+            if search_parameters.get('query_text') and search_parameters.get('query_image_ref'):
+                # Hybrid query: Process text first, then image, then combine in processed_query_data
+                text_data = self.q_agent.process_text_query(search_parameters['query_text'])
+                image_data = self.q_agent.process_image_query(search_parameters['query_image_ref'])
+                processed_query_data = {**text_data, **image_data} # Merge dicts
+                processed_query_data['intent'] = 'hybrid_text_visual_search'
+            elif search_parameters.get('query_text'):
                 processed_query_data = self.q_agent.process_text_query(search_parameters['query_text'])
             elif search_parameters.get('query_image_ref'):
-                # Visual search will primarily use its own pipeline later
                 processed_query_data = self.q_agent.process_image_query(search_parameters['query_image_ref'])
-                # For now, if visual search is primary, we might not fetch from SOAgent in the same way
             else:
                 return {"error": "No query input.", "status_code": 400}
-            
-            if not processed_query_data: # QAgent could return None on error
-                 return {"error": "Query understanding failed to produce data.", "status_code": 500}
-            print(f"Orchestrator: Processed query data: Keywords: {processed_query_data.get('keywords')}, Has Embedding: {bool(processed_query_data.get('query_embedding'))}")
+            if not processed_query_data: return {"error": "Query understanding failed.", "status_code": 500}
+            print(f"Orchestrator: Processed query data. Intent: {processed_query_data.get('intent')}")
         except Exception as e:
-            print(f"Orchestrator: Error in Query Understanding Agent: {e}")
             return {"error": f"Query understanding failed: {e}", "status_code": 500}
 
-        # 2. Source Orchestration & Interfacing (Primarily for text-based or hybrid queries)
-        if processed_query_data.get('intent') == 'general_video_search' and processed_query_data.get('processed_query'):
+
+        # 2. Source Orchestration (SOIAgent) - primarily for text queries or context for visual
+        raw_video_data_from_sources = []
+        if processed_query_data.get('intent') != 'visual_similarity_search': # If not PURE visual search
             try:
+                # fetch_content_from_sources might use text parts of query
                 raw_video_data_from_sources = self.so_agent.fetch_content_from_sources(processed_query_data)
-                print(f"Orchestrator: SOIAgent fetched {len(raw_video_data_from_sources)} raw items.")
-            except Exception as e:
-                print(f"Orchestrator: Warning - Error in Source Orchestration Agent: {e}")
-                # Continue even if some sources fail, but log it.
+            except Exception as e: print(f"Orchestrator: Warning - SOIAgent error: {e}")
         
-        # 3. Persist Basic Video Info (creates/updates Video and VideoSource DB entries)
-        persisted_video_source_objects = [] # List of VideoSource Django model instances
+        # 3. Persist Basic Video Info
+        persisted_video_source_objects = []
         if raw_video_data_from_sources:
             try:
                 persisted_video_source_objects = self._persist_basic_video_info(raw_video_data_from_sources)
-                print(f"Orchestrator: Persisted basic info for {len(persisted_video_source_objects)} video sources.")
-            except Exception as e:
-                print(f"Orchestrator: Error persisting basic video info: {e}")
-                # Decide if this is a critical failure or if we can proceed with semantic search on existing index
-        
-        # 4. Content Analysis (Transcripts, Keywords, Embeddings for newly fetched/updated sources)
-        all_analysis_data = {} # Stores analysis output from CAAgent, keyed by video_source_obj.id
-        if persisted_video_source_objects: # Only analyze sources we just fetched/updated
-            print(f"Orchestrator: Starting Content Analysis for {len(persisted_video_source_objects)} sources.")
-            for video_source_obj in persisted_video_source_objects:
-                raw_data_item = next((item for item in raw_video_data_from_sources if item.get('original_url') == video_source_obj.original_url), None)
-                if video_source_obj and raw_data_item and video_source_obj.video: # Ensure video link exists
-                    try:
-                        analysis_output = self.ca_agent.analyze_video_content(video_source_obj, raw_data_item)
-                        if analysis_output:
-                            all_analysis_data[video_source_obj.id] = analysis_output
-                    except Exception as e:
-                        print(f"Orchestrator: Error calling CAAgent for source {video_source_obj.id} ({video_source_obj.original_url}): {e}")
-        print(f"Orchestrator: Content Analysis completed. Detailed analysis attempted for {len(all_analysis_data)} sources.")
-        
-        # 5. Result Aggregation & Ranking (Uses Qdrant for semantic + keywords)
-        ranked_papri_video_ids_with_scores = [] # Expect list of dicts: {'video_id': id, 'score': score}
-        try:
-            # RARAgent needs all persisted_video_source_objects for keyword context,
-            # processed_query_data for query keywords and embedding,
-            # and all_analysis_data for extracted keywords from transcripts.
-            ranked_papri_video_ids_with_scores = self.ra_agent.aggregate_and_rank_results(
-                persisted_video_source_objects, # These are current session's fetched videos
-                processed_query_data,
-                all_analysis_data 
-            ) # This method in RARAgent was changed to return list of Video IDs. Let's assume it now returns list of {'video_id':id, 'score':X} for more info.
-              # We will adjust RARAgent to return this richer structure.
+            except Exception as e: print(f"Orchestrator: Error persisting basic video info: {e}")
 
-            print(f"Orchestrator: RARAgent returned {len(ranked_papri_video_ids_with_scores)} ranked items.")
+        # 4. Content Analysis (Transcripts by CAAgent's TranscriptAnalyzer)
+        #    Visual frame indexing by CAAgent's VisualAnalyzer is a separate, offline/batch process usually.
+        #    Here, CAAgent primarily does transcript analysis for text queries on newly fetched videos.
+        all_analysis_data = {} 
+        if persisted_video_source_objects:
+            for vs_obj in persisted_video_source_objects:
+                raw_data = next((item for item in raw_video_data_from_sources if item.get('original_url') == vs_obj.original_url), None)
+                if vs_obj and raw_data and vs_obj.video:
+                    try:
+                        # CAAgent.analyze_video_content is mainly for transcript processing now.
+                        # Visual frame indexing for these videos would be a different, heavier task.
+                        analysis_output = self.ca_agent.analyze_video_content(vs_obj, raw_data)
+                        if analysis_output: all_analysis_data[vs_obj.id] = analysis_output
+                    except Exception as e: print(f"Orchestrator: Error CAAgent for source {vs_obj.id}: {e}")
+        
+        # 5. Result Aggregation & Ranking (RARAgent)
+        # RARAgent now handles text, visual, or hybrid queries.
+        ranked_results_with_scores = [] # Expects list of dicts: {'video_id': X, 'combined_score': Y, ...}
+        try:
+            ranked_results_with_scores = self.ra_agent.aggregate_and_rank_results(
+                persisted_video_source_objects, # Videos fetched in this session (for keyword context)
+                processed_query_data,          # Contains query_text_embedding AND/OR query_visual_features
+                all_analysis_data              # Contains transcript keywords for fetched videos
+            )
         except Exception as e:
             print(f"Orchestrator: Error in Result Aggregation Agent: {e}")
-            # Fallback: if ranking fails, use unranked IDs from persisted sources
-            ranked_papri_video_ids_with_scores = [{'video_id': vs.video.id, 'score': 0.0} for vs in persisted_video_source_objects if vs.video]
+            # Basic fallback if RARAgent fails catastrophically
+            ranked_results_with_scores = [{'video_id': vs.video.id, 'combined_score': 0.0} for vs in persisted_video_source_objects if vs.video]
 
-
-        # Prepare final output for the Celery task
-        final_ranked_video_ids = [item['video_id'] for item in ranked_papri_video_ids_with_scores]
+        final_ranked_video_ids = [item['video_id'] for item in ranked_results_with_scores]
 
         return {
-            "message": "Search, analysis, and ranking orchestrated.",
+            "message": "Search orchestrated.", # Simplified message
             "items_fetched_from_sources": len(raw_video_data_from_sources),
-            "items_analyzed_for_content": len(all_analysis_data),
+            "items_analyzed_for_content": len(all_analysis_data), # Primarily transcript analysis count
             "ranked_video_count": len(final_ranked_video_ids),
-            "persisted_video_ids_ranked": final_ranked_video_ids, # This is what SearchTask will store
-            "results_with_scores": ranked_papri_video_ids_with_scores # For potential detailed logging or future use
+            "persisted_video_ids_ranked": final_ranked_video_ids,
+            "results_with_scores_for_logging": ranked_results_with_scores[:10] # Log top 10 full score details
         }
+
+
+ 
 
     @transaction.atomic
     def _persist_basic_video_info(self, video_data_list):
