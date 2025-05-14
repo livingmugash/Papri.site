@@ -152,3 +152,39 @@ CURRENCY_RATES = {
 }
 DEFAULT_CURRENCY = 'USD'
 ```
+
+# backend/papri_project/settings.py (Allauth additions)
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',        # Needed to login by username in Django admin
+    'allauth.account.auth_backends.AuthenticationBackend', # Allauth specific authentication methods
+]
+
+SITE_ID = 1 # Required by allauth
+
+ACCOUNT_AUTHENTICATION_METHOD = 'email' # Or 'username_email'
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_USERNAME_REQUIRED = False # If email is primary identifier
+ACCOUNT_EMAIL_VERIFICATION = 'optional' # Or 'mandatory'
+ACCOUNT_LOGIN_ATTEMPTS_LIMIT = 5
+ACCOUNT_LOGIN_ATTEMPTS_TIMEOUT = 300 # 5 minutes
+
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'SCOPE': [
+            'profile',
+            'email',
+        ],
+        'AUTH_PARAMS': {
+            'access_type': 'online',
+        },
+        'OAUTH_PKCE_ENABLED': True, # Recommended for security
+        'APP': { # Stored in Django Admin > Social Applications
+            'client_id': GOOGLE_CLIENT_ID,
+            'secret': GOOGLE_CLIENT_SECRET,
+            'key': '' # Not typically used for Google
+        }
+    }
+}
+LOGIN_REDIRECT_URL = '/app/' # Redirect to papriapp.html after login
+LOGOUT_REDIRECT_URL = '/'   # Redirect to landing page after logout
+ACCOUNT_LOGOUT_ON_GET = True # For easier logout links
