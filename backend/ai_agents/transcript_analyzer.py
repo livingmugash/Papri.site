@@ -100,6 +100,78 @@ def _generate_embedding(self, text_content):
         except Exception as e:
             print(f"TranscriptAnalyzer: Error generating embedding: {e}")
             return None
+def process_transcript_for_video_source(self, video_source_obj, raw_video_data_item):
+        full_text_transcript = None
+        timed_transcript_json = None
+        lang_code = 'en' 
+
+        if video_source_obj.platform_name == 'YouTube':
+            youtube_video_id = video_source_obj.platform_video_id
+            if youtube_video_id:
+                full_text_transcript, lang_code, timed_transcript_json = self._fetch_youtube_transcript(youtube_video_id)
+        # TODO: Add transcript fetching for Vimeo, Dailymotion if possible
+        else:
+            if raw_video_data_item and raw_video_data_item.get('description'):
+                full_text_transcript = raw_video_data_item.get('description')
+            else:
+                Transcript.objects.update_or_create(
+                    video_source=video_source_obj, language_code=lang_code or 'und',
+                    defaults={'transcript_text_content': "", 'processing_status': 'not_available', 'updated_at': timezone.now()}
+                )
+                return {"status": "no_transcript_content"}
+
+        if not full_text_transcript:
+            Transcript.objects.update_or_create(
+                video_source=video_source_obj, language_code=lang_code or 'und',
+                defaults={'transcript_text_content': "", 'processing_status': 'not_available', 'updated_at': timezone.now()}
+            )
+            return {"status": "no_transcript_content"}
+
+        # Ensure Video object is linked before proceeding
+        if not video_source_obj.video:
+            print(f"TranscriptAnalyzer: VideoSource ID {video_source_obj.id} is not linked to a canonical Video. Skipping transcript processing.")
+            return {"status": "error_video_not_linked"}
+
+        transcript_obj, created = Transcript.objects.update_or_create(
+            video_source=video_source_obj, language_code=lang_code or 'en', # Use detected lang_code
+            defaults={
+                'transcript_text_content': full_text_transcript,
+                'transcript_timed_json': timed_transcript_json,
+                'processing_status': 'pending_analysis', 
+                'updated_at': timezone.now()
+            }
+        )
+
+        embedding_vector = self._generate_embedding(full_text_transcript)
+        embedding_stored_successfully = False
+        if embedding_vector:
+            embedding_stored_successfully = self._store_embedding_in_qdrant(
+               transcript_obj.id, # Qdrant point ID = Django Transcript ID
+               video_source_obj.video.id, # Payload: Canonical Papri Video ID
+               embedding_vector
+            )
+        else:
+            print(f"TranscriptAnalyzer: Failed to generate embedding for Transcript ID {transcript_obj.id}")
+        
+        extracted_keywords_texts = self._extract_keywords(full_text_transcript)
+        existing_keywords_for_transcript = set(ExtractedKeyword.objects.filter(transcript=transcript_obj).values_list('keyword_text', flat=True))
+        keywords_to_create = [
+            ExtractedKeyword(transcript=transcript_obj, keyword_text=kw_text)
+            for kw_text in extracted_keywords_texts if kw_text not in existing_keywords_for_transcript
+        ]
+        if keywords_to_create: ExtractedKeyword.objects.bulk_create(keywords_to_create)
+
+        transcript_obj.processing_status = 'processed' if embedding_stored_successfully else 'analysis_partial_failed_embedding'
+        transcript_obj.save(update_fields=['processing_status'])
+
+        return {
+            "transcript_id": transcript_obj.id,
+            "language_code": lang_code,
+            "keywords": extracted_keywords_texts,
+            "embedding_generated": bool(embedding_vector),
+            "embedding_stored": embedding_stored_successfully,
+            "status": transcript_obj.processing_status
+        }
 
 
      def _ensure_milvus_collection_exists(self):
