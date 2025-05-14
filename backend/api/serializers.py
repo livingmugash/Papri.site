@@ -140,14 +140,10 @@ class VideoSourceResultSerializer(serializers.ModelSerializer):
         ]
 
 class VideoResultSerializer(serializers.ModelSerializer):
-    """
-    Serializer for the main Video model when returning search results.
-    This would typically include the best matching VideoSource(s).
-    """
     sources = VideoSourceResultSerializer(many=True, read_only=True)
-    # For search, you might want to add a relevance score or other search-specific fields
-    # relevance_score = serializers.FloatField(read_only=True, required=False)
-    # matched_snippet = serializers.CharField(read_only=True, required=False) # Text snippet that matched
+    relevance_score = serializers.FloatField(read_only=True, required=False)
+    match_types = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
+    best_match_timestamp_ms = serializers.IntegerField(read_only=True, required=False, allow_null=True) # NEW
 
     class Meta:
         model = Video
