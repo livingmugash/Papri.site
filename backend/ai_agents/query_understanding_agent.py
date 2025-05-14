@@ -2,6 +2,9 @@
 import spacy
 from django.conf import settings
 import os
+import re
+
+AGENT_NAME = "QueryUnderstandingAgent"
 
 class QueryUnderstandingAgent:
     def __init__(self, papri_task_id=None):
