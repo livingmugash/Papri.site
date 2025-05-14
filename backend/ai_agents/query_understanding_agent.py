@@ -76,8 +76,37 @@ class QueryUnderstandingAgent:
 
         return processed_data
 
+def process_text_query(self, text_query):
+        # ... (as before, returns dict with 'query_embedding') ...
+        if not text_query: return {'keywords': [], 'intent': 'general_video_search', 'processed_query': '', 'query_embedding': None}
+        doc = self.nlp(text_query)
+        keywords = [token.lemma_.lower() for token in doc if not token.is_stop and not token.is_punct and token.pos_ in ['NOUN', 'PROPN', 'VERB', 'ADJ']]
+        processed_query = " ".join(keywords) if keywords else text_query
+        query_embedding = self._generate_query_embedding(text_query)
+        return {
+            'original_query': text_query, 'keywords': keywords, 'intent': 'general_video_search',
+            'processed_query': processed_query, 'query_embedding': query_embedding
+        }
 
-def process_image_query(self, image_path_or_data):
-        # ... (existing logic) ...
-        print(f"QAgent - Image received: {image_path_or_data}")
-        return {'intent': 'visual_similarity_search', 'image_reference': image_path_or_data, 'query_embedding': None}
+    def process_image_query(self, image_path): # Takes the temporary image path
+        """
+        Processes an image query by extracting visual features.
+        """
+        print(f"QAgent: Processing image query for path: {image_path}")
+        if not image_path:
+            return {'intent': 'visual_similarity_search', 'error': 'No image path provided', 'visual_features': None}
+
+        visual_features = self.visual_analyzer.process_query_image(image_path)
+        # visual_features will be a dict: {'cnn_embedding': [...], 'perceptual_hashes': {'phash': '...', 'dhash': '...'}} or None
+
+        if not visual_features:
+            return {'intent': 'visual_similarity_search', 'error': 'Failed to extract visual features', 'visual_features': None}
+        
+        print(f"QAgent: Visual features extracted. Has CNN: {bool(visual_features.get('cnn_embedding'))}, Has Hashes: {bool(visual_features.get('perceptual_hashes'))}")
+        return {
+            'intent': 'visual_similarity_search',
+            'image_reference': image_path, # Keep original reference
+            'visual_features': visual_features # Add extracted features
+        }
+
+
