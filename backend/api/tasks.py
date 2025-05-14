@@ -73,3 +73,29 @@ def index_video_visual_features(self, video_source_id):
         print(f"VisualIndexTask: Error processing video {video_source_id}: {e}")
         # Optionally, mark the video_source as failed visual processing
         return {"status": "error", "reason": str(e)}
+
+
+@shared_task(bind=True, name='api.process_search_query')
+def process_search_query(self, search_task_id):
+    # ... (try block, fetching search_task, search_parameters prep) ...
+    try:
+        # ...
+        orchestrator = PapriAIAgentOrchestrator(papri_search_task_id=search_task_id)
+        orchestration_result = orchestrator.execute_search(search_parameters) # Returns dict
+
+        if orchestration_result and "error" not in orchestration_result:
+            search_task.status = 'completed'
+            ranked_ids = orchestration_result.get("persisted_video_ids_ranked", [])
+            search_task.result_video_ids_json = ranked_ids 
+            
+            # Optionally store the detailed scores and match types
+            # Add a new JSONField to SearchTask model: e.g., detailed_ranking_info_json
+            # search_task.detailed_ranking_info_json = orchestration_result.get("results_data_detailed")
+        else:
+            # ... (error handling) ...
+        
+        search_task.updated_at = timezone.now()
+        update_fields = ['status', 'error_message', 'updated_at', 'result_video_ids_json']
+        # if 'detailed_ranking_info_json' in locals(): update_fields.append('detailed_ranking_info_json')
+        search_task.save(update_fields=update_fields)
+        # ... (return dict)
