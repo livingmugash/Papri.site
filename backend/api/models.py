@@ -226,3 +226,23 @@ class SignupCode(models.Model):
 
     def __str__(self):
         return f"Code {self.code} for {self.email} (Used: {self.is_used})"
+
+
+# backend/api/models.py
+# ... other imports and models ...
+
+class SearchTask(models.Model):
+    # ... existing fields ...
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, help_text="Unique ID for the search task.")
+    # ...
+    status = models.CharField(max_length=20, choices=SearchTask.status_choices, default='pending', db_index=True)
+    error_message = models.TextField(null=True, blank=True)
+    
+    # NEW FIELD: Store JSON array of Papri Video model IDs that are results of this task
+    result_video_ids_json = models.JSONField(null=True, blank=True, help_text="JSON array of Papri Video IDs for this task's results.")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"SearchTask {self.id} ({self.status})"
