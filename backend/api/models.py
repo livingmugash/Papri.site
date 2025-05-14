@@ -53,6 +53,28 @@ class VideoSource(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    VISUAL_PROCESSING_STATUS_CHOICES = [
+        ('pending', 'Pending Download/Index'),
+        ('downloading', 'Downloading'),
+        ('download_failed', 'Download Failed'),
+        ('indexing', 'Indexing Frames'), # Could be set by VisualAnalyzer itself
+        ('analysis_failed', 'Frame Analysis Failed'),
+        ('error_unexpected', 'Unexpected Error'),
+        ('completed', 'Visual Indexing Completed'),
+        ('not_applicable', 'Not Applicable (e.g., audio only)'),
+    ]
+    meta_visual_processing_status = models.CharField(
+        max_length=20, 
+        choices=VISUAL_PROCESSING_STATUS_CHOICES, 
+        default='pending', 
+        null=True, blank=True, db_index=True
+    )
+    meta_visual_processing_error = models.TextField(null=True, blank=True)
+    last_visual_indexed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
     class Meta:
         unique_together = ('platform_name', 'platform_video_id') # A video ID is unique per platform
         indexes = [
