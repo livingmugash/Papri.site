@@ -433,3 +433,97 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (emailElement) emailElement.textContent = "demo@example.com";
                 } else {
                     const
+
+
+function displayResults(results_data) { // results_data is the array from VideoResultSerializer
+    searchResultsContainer.innerHTML = ''; 
+    if (!results_data || results_data.length === 0) { // Check if results_data itself is undefined or empty
+        searchResultsContainer.innerHTML = '<p class="text-center text-gray-500 italic">No results found for your query.</p>';
+        return;
+    }
+    results_data.forEach(video_result => { // Each item is a serialized Video object
+        const card = createResultCardElement_Django(video_result);
+        searchResultsContainer.appendChild(card);
+    });
+    initLucideIcons(); 
+}
+
+function createResultCardElement_Django(video_result) { // video_result is one item from VideoResultSerializer output
+    const card = document.createElement('div');
+    card.id = `result-${video_result.id}`; // Papri Video ID
+    card.className = 'result-card bg-white p-3 sm:p-4 rounded-lg shadow border border-gray-200 flex flex-col md:flex-row gap-3 sm:gap-4 overflow-hidden';
+
+    const title = video_result.title || 'Untitled Video';
+    const thumbnailUrl = video_result.primary_thumbnail_url || `https://via.placeholder.com/320x180.png?text=${encodeURIComponent(title.substring(0,10))}`;
+    const description = video_result.description ? (video_result.description.length > 150 ? video_result.description.substring(0, 147) + '...' : video_result.description) : 'No description available.';
+    const publicationDate = video_result.publication_date ? new Date(video_result.publication_date).toLocaleDateString() : 'N/A';
+    
+    // 'sources' is an array of VideoSourceResultSerializer outputs
+    const primarySourceInfo = video_result.sources && video_result.sources.length > 0 ? video_result.sources[0] : null;
+    const sourcePlatform = primarySourceInfo ? primarySourceInfo.platform_name : 'Unknown Source';
+    const originalUrl = primarySourceInfo ? primarySourceInfo.original_url : '#';
+    
+    // For player functionality later:
+    // card.dataset.videoPapriId = video_result.id;
+    // if (primarySourceInfo) {
+    //     card.dataset.videoSourceUrl = primarySourceInfo.embed_url || primarySourceInfo.original_url;
+    // }
+    // card.dataset.duration = video_result.duration_seconds || 0;
+
+    card.innerHTML = `
+        <div class="w-full md:w-48 lg:w-56 flex-shrink-0">
+            <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="block aspect-video bg-gray-300 rounded overflow-hidden relative group thumbnail-container" 
+                 aria-label="Watch video: ${title} on ${sourcePlatform}">
+                <img src="${thumbnailUrl}" alt="Video thumbnail for ${title}" class="w-full h-full object-cover" loading="lazy">
+                <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-opacity duration-200">
+                    <i data-lucide="play-circle" class="w-10 h-10 text-white opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none"></i>
+                </div>
+            </a>
+            <p class="text-xs text-center text-gray-500 mt-1 md:mt-1.5">Source: ${sourcePlatform}</p>
+        </div>
+
+        <div class="flex-grow min-w-0">
+            <h3 class="text-md sm:text-lg font-semibold text-indigo-700 mb-1 line-clamp-2">
+                <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="hover:underline">${title}</a>
+            </h3>
+            <p class="text-xs text-gray-500 mb-2">Published: ${publicationDate} | Duration: ${formatDuration(video_result.duration_seconds)}</p>
+            <p class="text-sm text-gray-600 line-clamp-3 mb-3">${description}</p>
+            
+            <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center">
+                <button class="action-button btn-preview" data-video-id="${video_result.id}" aria-label="Preview this video (feature coming)" disabled> 
+                    <i data-lucide="play-circle" class="action-icon"></i> Preview
+                </button>
+                <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="action-button btn-source" aria-label="Open original source">
+                    <i data-lucide="external-link" class="action-icon"></i> Source
+                </a>
+                <button class="action-button btn-save-clip" data-video-id="${video_result.id}" aria-label="Save this video (feature coming)" disabled>
+                    <i data-lucide="bookmark-plus" class="action-icon"></i> Save 
+                </button>
+                </div>
+        </div>
+    `;
+    return card;
+}
+
+// Helper function to format duration
+function formatDuration(totalSeconds) {
+    if (totalSeconds === null || totalSeconds === undefined || totalSeconds <= 0) {
+        return 'N/A';
+    }
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+
+    const paddedSeconds = String(seconds).padStart(2, '0');
+    const paddedMinutes = String(minutes).padStart(2, '0');
+
+    if (hours > 0) {
+        return `${hours}:${paddedMinutes}:${paddedSeconds}`;
+    }
+    return `${paddedMinutes}:${paddedSeconds}`;
+}
+
+
+// ... (showStatusMessage, switchView, setupReferralCopy, setupSettingsActions, setupLogout, updateUserInfoPlaceholders, handleResultAction etc.) ...
+// Ensure handleResultAction is adapted for any data attributes you add to buttons for interaction.
+
