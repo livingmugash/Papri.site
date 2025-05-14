@@ -12,112 +12,114 @@ from django.db import transaction # For atomic database operations
 class PapriAIAgentOrchestrator:
     def __init__(self, papri_search_task_id):
         self.papri_search_task_id = papri_search_task_id
-        self.search_task = SearchTask.objects.get(id=self.papri_search_task_id) # For updating status/results
-
-        # Initialize the agents
         self.q_agent = QueryUnderstandingAgent()
-        self.soi_agent = SourceOrchestrationAgent()
-        # self.ca_agent = ContentAnalysisAgent() # Initialize when ready
-        # self.rar_agent = ResultAggregationAgent() # Initialize when ready
-
+        self.so_agent = SourceOrchestrationAgent()
+        self.ca_agent = ContentAnalysisAgent()
+        self.ra_agent = ResultAggregationAgent()
         print(f"Orchestrator initialized for SearchTask ID: {self.papri_search_task_id}")
 
-    def execute_search(self, search_params):
-        """
-        Main method to execute the video search process.
-        search_params: dict containing 'query_text', 'query_image_ref', 'applied_filters', etc.
-        """
-        print(f"Orchestrator: Executing search with params: {search_params}")
+    def execute_search(self, search_parameters):
+        print(f"Orchestrator: Executing search with params: {search_parameters}")
         processed_query_data = None
         raw_video_data_from_sources = []
-
+        
+        # 1. Query Understanding
         try:
-            # 1. Understand the Query (QAgent)
-            if search_params.get('query_text'):
-                processed_query_data = self.q_agent.process_text_query(search_params['query_text'])
-            elif search_params.get('query_image_ref'): # query_image_ref is the path to the temp image
-                processed_query_data = self.q_agent.process_image_query(search_params['query_image_ref'])
+            if search_parameters.get('query_text'):
+                processed_query_data = self.q_agent.process_text_query(search_parameters['query_text'])
+            elif search_parameters.get('query_image_ref'):
+                # Visual search will primarily use its own pipeline later
+                processed_query_data = self.q_agent.process_image_query(search_parameters['query_image_ref'])
+                # For now, if visual search is primary, we might not fetch from SOAgent in the same way
             else:
-                print("Orchestrator: No query text or image reference provided.")
-                self.search_task.error_message = "No query input."
-                self.search_task.status = 'failed'
-                self.search_task.save()
-                return {"error": "No query input.", "results": []}
+                return {"error": "No query input.", "status_code": 400}
+            
+            if not processed_query_data: # QAgent could return None on error
+                 return {"error": "Query understanding failed to produce data.", "status_code": 500}
+            print(f"Orchestrator: Processed query data: Keywords: {processed_query_data.get('keywords')}, Has Embedding: {bool(processed_query_data.get('query_embedding'))}")
+        except Exception as e:
+            print(f"Orchestrator: Error in Query Understanding Agent: {e}")
+            return {"error": f"Query understanding failed: {e}", "status_code": 500}
 
-            if not processed_query_data:
-                print("Orchestrator: Query processing failed.")
-                self.search_task.error_message = "Query understanding failed."
-                self.search_task.status = 'failed'
-                self.search_task.save()
-                return {"error": "Query understanding failed.", "results": []}
-
-            print(f"Orchestrator: Processed query data: {processed_query_data}")
-
-            # 2. Fetch Content from Sources (SOIAgent)
-            # SOI Agent will use processed_query_data (especially 'processed_query' or 'intent')
-            # and API keys (accessed via Django settings within the agent).
-            raw_video_data_from_sources = self.soi_agent.fetch_content_from_sources(processed_query_data)
-            print(f"Orchestrator: SOI Agent fetched {len(raw_video_data_from_sources)} raw items.")
-
-            # 3. Content Analysis (CAAgent) - Placeholder for now
-           all_analysis_data = {} # Stores output from CAAgent, keyed by video_source_obj.id
-        if persisted_video_source_objects:
+        # 2. Source Orchestration & Interfacing (Primarily for text-based or hybrid queries)
+        if processed_query_data.get('intent') == 'general_video_search' and processed_query_data.get('processed_query'):
+            try:
+                raw_video_data_from_sources = self.so_agent.fetch_content_from_sources(processed_query_data)
+                print(f"Orchestrator: SOIAgent fetched {len(raw_video_data_from_sources)} raw items.")
+            except Exception as e:
+                print(f"Orchestrator: Warning - Error in Source Orchestration Agent: {e}")
+                # Continue even if some sources fail, but log it.
+        
+        # 3. Persist Basic Video Info (creates/updates Video and VideoSource DB entries)
+        persisted_video_source_objects = [] # List of VideoSource Django model instances
+        if raw_video_data_from_sources:
+            try:
+                persisted_video_source_objects = self._persist_basic_video_info(raw_video_data_from_sources)
+                print(f"Orchestrator: Persisted basic info for {len(persisted_video_source_objects)} video sources.")
+            except Exception as e:
+                print(f"Orchestrator: Error persisting basic video info: {e}")
+                # Decide if this is a critical failure or if we can proceed with semantic search on existing index
+        
+        # 4. Content Analysis (Transcripts, Keywords, Embeddings for newly fetched/updated sources)
+        all_analysis_data = {} # Stores analysis output from CAAgent, keyed by video_source_obj.id
+        if persisted_video_source_objects: # Only analyze sources we just fetched/updated
+            print(f"Orchestrator: Starting Content Analysis for {len(persisted_video_source_objects)} sources.")
             for video_source_obj in persisted_video_source_objects:
-                raw_data_item_for_source = next(
-                    (item for item in raw_video_data_from_sources if item.get('original_url') == video_source_obj.original_url), None
-                )
-                if video_source_obj and raw_data_item_for_source: # raw_data_item needed for platforms without direct transcript API
+                raw_data_item = next((item for item in raw_video_data_from_sources if item.get('original_url') == video_source_obj.original_url), None)
+                if video_source_obj and raw_data_item and video_source_obj.video: # Ensure video link exists
                     try:
-                        analysis_output = self.ca_agent.analyze_video_content(video_source_obj, raw_data_item_for_source)
+                        analysis_output = self.ca_agent.analyze_video_content(video_source_obj, raw_data_item)
                         if analysis_output:
                             all_analysis_data[video_source_obj.id] = analysis_output
                     except Exception as e:
-                        print(f"Orchestrator: Error calling CAAgent for source {video_source_obj.id}: {e}")
-        print(f"Orchestrator: Content Analysis completed. Processed {len(all_analysis_data)} sources for analysis.")
+                        print(f"Orchestrator: Error calling CAAgent for source {video_source_obj.id} ({video_source_obj.original_url}): {e}")
+        print(f"Orchestrator: Content Analysis completed. Detailed analysis attempted for {len(all_analysis_data)} sources.")
         
-            # 4. Aggregate and Rank Results (RARAgent) - Placeholder for now
-            # ranked_results = self.rar_agent.aggregate_and_rank(analyzed_content, processed_query_data)
-            # For now, simple ranking or just passing through
-            # We also need to save these results to our Django models (Video, VideoSource)
-            
-            saved_video_sources = self._save_results_to_db(analyzed_content)
-            print(f"Orchestrator: Saved/Updated {len(saved_video_sources)} video sources to DB.")
+        # 5. Result Aggregation & Ranking (Uses Qdrant for semantic + keywords)
+        ranked_papri_video_ids_with_scores = [] # Expect list of dicts: {'video_id': id, 'score': score}
+        try:
+            # RARAgent needs all persisted_video_source_objects for keyword context,
+            # processed_query_data for query keywords and embedding,
+            # and all_analysis_data for extracted keywords from transcripts.
+            ranked_papri_video_ids_with_scores = self.ra_agent.aggregate_and_rank_results(
+                persisted_video_source_objects, # These are current session's fetched videos
+                processed_query_data,
+                all_analysis_data 
+            ) # This method in RARAgent was changed to return list of Video IDs. Let's assume it now returns list of {'video_id':id, 'score':X} for more info.
+              # We will adjust RARAgent to return this richer structure.
 
-            # The RARAgent would produce the final list of Video objects (or their IDs) to be returned.
-             ranked_papri_video_ids = []
-        if persisted_video_source_objects: # Pass the Django objects
-            try:
-                # RARAgent needs the query keywords and the analysis data (which contains extracted keywords)
-                ranked_papri_video_ids = self.ra_agent.aggregate_and_rank_results(
-                    persisted_video_source_objects, 
-                    processed_query_data,
-                    all_analysis_data 
-                )
-                print(f"Orchestrator: RARAgent returned {len(ranked_papri_video_ids)} ranked Papri Video IDs.")
-            except Exception as e:
-                print(f"Orchestrator: Error in Result Aggregation Agent: {e}")
-                # Fallback: use unranked IDs if ranking fails
-                ranked_papri_video_ids = [vs_obj.video.id for vs_obj in persisted_video_source_objects if vs_obj.video]
-        else: # No sources fetched or persisted
-             print(f"Orchestrator: No persisted video sources to rank.")
+            print(f"Orchestrator: RARAgent returned {len(ranked_papri_video_ids_with_scores)} ranked items.")
+        except Exception as e:
+            print(f"Orchestrator: Error in Result Aggregation Agent: {e}")
+            # Fallback: if ranking fails, use unranked IDs from persisted sources
+            ranked_papri_video_ids_with_scores = [{'video_id': vs.video.id, 'score': 0.0} for vs in persisted_video_source_objects if vs.video]
 
+
+        # Prepare final output for the Celery task
+        final_ranked_video_ids = [item['video_id'] for item in ranked_papri_video_ids_with_scores]
 
         return {
             "message": "Search, analysis, and ranking orchestrated.",
-            "items_processed_from_sources": len(raw_video_data_from_sources),
+            "items_fetched_from_sources": len(raw_video_data_from_sources),
             "items_analyzed_for_content": len(all_analysis_data),
-            "persisted_video_ids": ranked_papri_video_ids, # Return RANKED Papri Video IDs
+            "ranked_video_count": len(final_ranked_video_ids),
+            "persisted_video_ids_ranked": final_ranked_video_ids, # This is what SearchTask will store
+            "results_with_scores": ranked_papri_video_ids_with_scores # For potential detailed logging or future use
         }
 
     @transaction.atomic
     def _persist_basic_video_info(self, video_data_list):
-        # ... (This method remains the same as defined in the previous step)
-        # It returns a list of VideoSource Django model instances.
+        # ... (This method remains mostly the same as defined in Step 17/18)
+        # Ensure it correctly links VideoSource to a canonical Video object.
+        # The key challenge here is robust Video object deduplication.
+        # For now, it uses title as a weak de-dupe key for Video.
+        # Ideally, it would use a content-based deduplication_hash if available.
         created_or_updated_sources = []
+        video_map_by_title = {} # Simple cache to reduce DB hits for Video with same title in this batch
+
         for item_data in video_data_list:
             original_url = item_data.get('original_url')
             if not original_url: continue
-
             platform_name = item_data.get('platform_name')
             platform_video_id = item_data.get('platform_video_id')
             if not platform_name or not platform_video_id: continue
@@ -132,55 +134,62 @@ class PapriAIAgentOrchestrator:
 
             papri_video = video_source.video
             video_is_newly_associated = False
-            if not papri_video:
-                # Simplified Video creation/linking. Needs robust de-duplication strategy for Video model later.
-                # For now, create a new Video if no existing one is linked to this source,
-                # or if creating one based on title (or other de-dupe key) doesn't find one.
-                # This might lead to multiple Papri Video objects for the same conceptual video if it appears
-                # on different sources with slightly different metadata.
-                # A proper deduplication_hash on Video model is crucial here.
-                temp_title = item_data.get('title', 'Untitled Video')
-                
-                # Attempt to find by a potential deduplication_hash if SOIAgent could provide one
-                # For now, this is a simplification and might create duplicate Video entries.
-                video_defaults = {
-                    'description': item_data.get('description'),
-                    'duration_seconds': item_data.get('duration_seconds'),
-                    'primary_thumbnail_url': item_data.get('thumbnail_url'),
-                }
-                pub_date_str_defaults = item_data.get('publication_date')
-                if pub_date_str_defaults:
-                    try: video_defaults['publication_date'] = timezone.datetime.fromisoformat(pub_date_str_defaults.replace('Z', '+00:00'))
-                    except ValueError:
-                        try: video_defaults['publication_date'] = timezone.datetime.strptime(pub_date_str_defaults, "%Y-%m-%dT%H:%M:%S.%fZ")
-                        except ValueError: pass # Silently ignore if date format is unparseable for defaults
 
-                papri_video, video_created = Video.objects.get_or_create(
-                    title=temp_title, # Using title as a weak de-dupe key for Video object for now.
-                                      # This IS NOT ROBUST. Replace with a proper deduplication_hash.
-                    defaults=video_defaults
-                )
-                if video_created:
-                    print(f"Orchestrator Persist: Created NEW Papri Video ID: {papri_video.id} for title '{papri_video.title}'")
+            if not papri_video:
+                temp_title = item_data.get('title', 'Untitled Video')
+                # Attempt to find an existing Video by title (weak de-dupe)
+                if temp_title in video_map_by_title:
+                    papri_video = video_map_by_title[temp_title]
+                else:
+                    video_defaults = {
+                        'description': item_data.get('description'),
+                        'duration_seconds': item_data.get('duration_seconds'),
+                        'primary_thumbnail_url': item_data.get('thumbnail_url'),
+                    }
+                    pub_date_str_defaults = item_data.get('publication_date')
+                    if pub_date_str_defaults:
+                        try: video_defaults['publication_date'] = timezone.datetime.fromisoformat(pub_date_str_defaults.replace('Z', '+00:00'))
+                        except ValueError:
+                            try: video_defaults['publication_date'] = timezone.datetime.strptime(pub_date_str_defaults, "%Y-%m-%dT%H:%M:%S.%fZ")
+                            except ValueError: pass
+
+                    # get_or_create for Video based on title.
+                    # THIS IS STILL A WEAK DEDUPLICATION for the canonical Video object.
+                    # A content-based hash on the Video model is the proper way.
+                    papri_video, video_created = Video.objects.get_or_create(
+                        title=temp_title, 
+                        defaults=video_defaults
+                    )
+                    video_map_by_title[temp_title] = papri_video # Cache it for this batch
+                    if video_created:
+                        print(f"Orchestrator Persist: Created NEW Papri Video ID: {papri_video.id} for title '{papri_video.title}'")
+                
                 video_source.video = papri_video # Link source to this video
                 video_is_newly_associated = True
 
-
-            # Update Video fields (idempotently)
-            papri_video.title = item_data.get('title') or papri_video.title # Ensure title is set
-            papri_video.description = item_data.get('description') or papri_video.description
-            papri_video.duration_seconds = item_data.get('duration_seconds') or papri_video.duration_seconds
-            papri_video.primary_thumbnail_url = item_data.get('thumbnail_url') or papri_video.primary_thumbnail_url
+            # Update Video fields if new data is more complete or different
+            # (Idempotent updates)
+            changed_video_fields = []
+            if item_data.get('title') and item_data.get('title') != papri_video.title:
+                papri_video.title = item_data.get('title'); changed_video_fields.append('title')
+            if item_data.get('description') and item_data.get('description') != papri_video.description:
+                papri_video.description = item_data.get('description'); changed_video_fields.append('description')
+            if item_data.get('duration_seconds') is not None and item_data.get('duration_seconds') != papri_video.duration_seconds:
+                papri_video.duration_seconds = item_data.get('duration_seconds'); changed_video_fields.append('duration_seconds')
+            if item_data.get('thumbnail_url') and item_data.get('thumbnail_url') != papri_video.primary_thumbnail_url:
+                papri_video.primary_thumbnail_url = item_data.get('thumbnail_url'); changed_video_fields.append('primary_thumbnail_url')
+            
             pub_date_str = item_data.get('publication_date')
-            current_pub_date = papri_video.publication_date
             if pub_date_str:
                 try: new_pub_date = timezone.datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
                 except ValueError:
                     try: new_pub_date = timezone.datetime.strptime(pub_date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-                    except ValueError: new_pub_date = None; print(f"Could not parse publication_date: {pub_date_str}")
-                if new_pub_date and (not current_pub_date or new_pub_date != current_pub_date) : # Check before assigning
-                    papri_video.publication_date = new_pub_date
-            papri_video.save()
+                    except ValueError: new_pub_date = None
+                if new_pub_date and new_pub_date != papri_video.publication_date:
+                    papri_video.publication_date = new_pub_date; changed_video_fields.append('publication_date')
+            
+            if changed_video_fields:
+                papri_video.save(update_fields=changed_video_fields)
 
             # Update VideoSource fields
             video_source.platform_name = platform_name 
@@ -188,114 +197,14 @@ class PapriAIAgentOrchestrator:
             video_source.embed_url = item_data.get('embed_url')
             video_source.source_metadata_json = item_data 
             video_source.last_scraped_at = timezone.now()
-            if video_is_newly_associated: # Save if video was just linked
-                 video_source.save()
+            if video_is_newly_associated or source_created: # Save if video was just linked or source is new
+                 video_source.save() 
             else: # Else, save only if there were other changes to video_source itself
-                 video_source.save(update_fields=['platform_name', 'platform_video_id', 'embed_url', 'source_metadata_json', 'last_scraped_at'])
-
+                 video_source.save(update_fields=['platform_name', 'platform_video_id', 'video', 'embed_url', 'source_metadata_json', 'last_scraped_at'])
+            
             created_or_updated_sources.append(video_source)
         
         return created_or_updated_sources
-
-
-            # Update search task with a summary (e.g., number of results)
-            # self.search_task.result_summary_json = {"items_found": len(final_results_for_response)}
-            # self.search_task.save(update_fields=['result_summary_json'])
-
-            return {"message": "Search executed", "results_data": final_results_for_response}
-
-        except Exception as e:
-            error_msg = f"Orchestrator error during search execution: {str(e)}"
-            print(error_msg)
-            self.search_task.error_message = error_msg[:1000] # Truncate
-            self.search_task.status = 'failed'
-            self.search_task.save()
-            # Potentially re-raise or handle more gracefully
-            return {"error": error_msg, "results_data": []}
-
-    def _save_results_to_db(self, video_data_list):
-        """
-        Saves or updates video data fetched from sources into the Papri database.
-        video_data_list: A list of dictionaries, where each dict has keys like
-                         'platform_name', 'platform_video_id', 'title', 'original_url', etc.
-        Returns a list of saved/updated VideoSource objects.
-        """
-        saved_sources = []
-        for item_data in video_data_list:
-            if not item_data.get('original_url') or not item_data.get('platform_name') or not item_data.get('platform_video_id'):
-                print(f"Skipping item due to missing essential data: {item_data.get('title', 'N/A')}")
-                continue
-            
-            try:
-                # Check if VideoSource already exists
-                video_source, created_vs = VideoSource.objects.get_or_create(
-                    original_url=item_data['original_url'],
-                    defaults={
-                        'platform_name': item_data['platform_name'],
-                        'platform_video_id': item_data['platform_video_id'],
-                        # 'video' will be set below
-                    }
-                )
-
-                # If VideoSource is new, or if its related Video doesn't exist or needs update
-                # This logic needs to be robust for deduplicating Video entries.
-                # For now, a simple approach: if vs is new, create video. If vs exists, update its video.
-                # A better approach uses a deduplication_hash on the Video model.
-
-                video_defaults = {
-                    'title': item_data.get('title', 'Untitled Video'),
-                    'description': item_data.get('description'),
-                    'duration_seconds': item_data.get('duration_seconds'),
-                    'publication_date': item_data.get('publication_date'), # Ensure this is datetime
-                    'primary_thumbnail_url': item_data.get('thumbnail_url'),
-                    # 'deduplication_hash': generate_video_dedup_hash(item_data) # TODO
-                }
-                
-                # Attempt to find an existing Video based on some criteria (e.g. title+duration, or a future dedup hash)
-                # This is a simplified deduplication.
-                # A more robust deduplication would involve checking the deduplication_hash
-                # or more complex matching if multiple sources point to the same conceptual video.
-                related_video = None
-                if not created_vs and video_source.video: # VideoSource existed, use its video
-                    related_video = video_source.video
-                    # Update existing video details if new data is better/more complete
-                    for key, value in video_defaults.items():
-                        if value is not None: # Only update if new value is provided
-                             setattr(related_video, key, value)
-                    related_video.save()
-                else: # New VideoSource, or existing one without a video, try to find or create Video
-                    # This part is tricky without a good global video identifier or robust deduplication_hash
-                    # For now, let's assume we create a new Video if the VideoSource is new.
-                    # If you have a strong `deduplication_hash` logic for the Video model:
-                    # video_dedup_hash = generate_video_dedup_hash(item_data)
-                    # related_video, created_video = Video.objects.update_or_create(
-                    #     deduplication_hash=video_dedup_hash,
-                    #     defaults=video_defaults
-                    # )
-                    # For now, let's just create a new video if the source is new.
-                    # This will lead to duplicates if the same video is on multiple platforms and we don't have a global ID.
-                    if created_vs:
-                        related_video = Video.objects.create(**video_defaults)
-                    elif not video_source.video: # VS existed but had no video somehow
-                         related_video = Video.objects.create(**video_defaults)
-
-
-                if related_video:
-                    video_source.video = related_video
-                
-                # Update other VideoSource fields
-                video_source.platform_name = item_data['platform_name']
-                video_source.platform_video_id = item_data['platform_video_id']
-                video_source.embed_url = item_data.get('embed_url')
-                video_source.source_metadata_json = item_data # Store the whole raw item
-                video_source.last_scraped_at = timezone.now()
-                video_source.save()
-                saved_sources.append(video_source)
-
-            except Exception as e:
-                print(f"Orchestrator: Error saving item '{item_data.get('title', 'N/A')}' to DB: {e}")
-        
-        return saved_sources
 
 
 class PapriAIAgentOrchestrator:
