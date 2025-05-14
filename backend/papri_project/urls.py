@@ -25,3 +25,8 @@ urlpatterns = [
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     # urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT) # Usually handled by runserver in DEBUG
+
+# backend/api/urls.py (example)
+# ... other url patterns
+from .views import papri_app_view
+path('app/', papri_app_view, name='papri_app_home'),
