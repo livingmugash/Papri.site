@@ -3,29 +3,34 @@ import spacy
 from django.conf import settings
 import os
 import re
+from sentence_transformers import SentenceTransformer # Add this
 
 AGENT_NAME = "QueryUnderstandingAgent"
 
 class QueryUnderstandingAgent:
-    def __init__(self, papri_task_id=None):
-        self.papri_task_id = papri_task_id
-        self.nlp = None
+    def __init__(self):
         try:
             self.nlp = spacy.load("en_core_web_sm")
         except OSError:
-            print("QAgent: Downloading spaCy en_core_web_sm model...")
-            # Ensure spacy is in your requirements.txt
-            # You might need to run this command manually once in your environment:
-            # python -m spacy download en_core_web_sm
-            # For now, we'll let it error out if not found during init,
-            # as automatic download in a worker might be problematic.
-            # Consider a management command to download models.
-            # For robust error handling:
-            # raise RuntimeError("spaCy 'en_core_web_sm' model not found. Please run 'python -m spacy download en_core_web_sm'")
-            print("QAgent: spaCy 'en_core_web_sm' model not found. Please ensure it's downloaded.")
+            # ... (spacy model download logic) ...
+            self.nlp = spacy.load("en_core_web_sm")
+        
+        try:
+            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("QueryUnderstandingAgent: SentenceTransformer model loaded.")
+        except Exception as e:
+            print(f"QueryUnderstandingAgent: CRITICAL - Failed to load SentenceTransformer model: {e}")
+            self.embedding_model = None
 
-
-        print(f"QAgent initialized for task: {self.papri_task_id if self.papri_task_id else 'Generic'}")
+    def _generate_query_embedding(self, text_query):
+        if not self.embedding_model or not text_query:
+            return None
+        try:
+            embedding = self.embedding_model.encode(text_query, convert_to_tensor=False)
+            return embedding.tolist()
+        except Exception as e:
+            print(f"QueryUnderstandingAgent: Error generating query embedding: {e}")
+            return None
 
     def process_query(self, search_params):
         """
@@ -70,3 +75,9 @@ class QueryUnderstandingAgent:
             # raise ValueError("No query text or image reference provided to QAgent.") # Or handle gracefully
 
         return processed_data
+
+
+def process_image_query(self, image_path_or_data):
+        # ... (existing logic) ...
+        print(f"QAgent - Image received: {image_path_or_data}")
+        return {'intent': 'visual_similarity_search', 'image_reference': image_path_or_data, 'query_embedding': None}
