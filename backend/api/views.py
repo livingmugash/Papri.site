@@ -275,3 +275,11 @@ class ActivateAccountWithCodeView(views.APIView):
                 return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+from django.shortcuts import render
+from django.contrib.auth.decorators import login_required # To protect the app page
+
+@login_required # Ensure user is logged in to access the app
+def papri_app_view(request):
+    return render(request, 'papriapp.html') # Assumes papriapp.html is in templates/
