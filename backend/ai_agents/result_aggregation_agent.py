@@ -56,119 +56,95 @@ class ResultAggregationAgent:
         return [] # Stub for now
 
     def aggregate_and_rank_results(self, persisted_video_source_objects, processed_query_data, all_analysis_data):
-        print(f"RARAgent: Aggregating. Query keywords: {processed_query_data.get('keywords')}, Has Embedding: {bool(processed_query_data.get('query_embedding'))}")
-
+        # ... (query_keywords, query_embedding, semantic_scores_by_video_id calculation as before) ...
         query_keywords = set(k.lower() for k in processed_query_data.get('keywords', []))
         query_embedding = processed_query_data.get('query_embedding')
-
-        # --- 1. Semantic Search (if query_embedding exists) ---
         semantic_scores_by_video_id = defaultdict(float)
+        candidate_video_papri_ids = list(set(vs.video.id for vs in persisted_video_source_objects if vs.video))
+
         if query_embedding:
-            # This search returns transcript_ids and their scores. We need to map them to Papri Video IDs.
-            semantic_hits = self._search_vector_db(query_embedding, top_k=50) # Search top K
-            
+            ids_for_qdrant_filter = candidate_video_papri_ids if candidate_video_papri_ids else None
+            semantic_hits = self._search_qdrant_db(query_embedding, top_k=50, video_papri_ids_filter_list=ids_for_qdrant_filter)
             for hit in semantic_hits:
-                transcript_id = hit['transcript_id']
-                video_papri_id_from_vec_db = hit.get('video_papri_id') # If stored in vector DB
-                semantic_score = hit['semantic_score']
+                video_id = hit.get('video_papri_id')
+                if video_id is not None:
+                    semantic_scores_by_video_id[video_id] = max(semantic_scores_by_video_id[video_id], hit['semantic_score'])
 
-                if video_papri_id_from_vec_db:
-                     # Prioritize the video_papri_id retrieved directly from vector DB if available
-                    # Aggregate scores if multiple transcripts from same video match (e.g., take max)
-                    semantic_scores_by_video_id[video_papri_id_from_vec_db] = max(semantic_scores_by_video_id[video_papri_id_from_vec_db], semantic_score)
-                else:
-                    # Fallback: Find VideoSource -> Video via transcript_id from Django DB if not in vector DB results
-                    try:
-                        transcript = Transcript.objects.select_related('video_source__video').get(id=transcript_id)
-                        if transcript.video_source and transcript.video_source.video:
-                            video_id = transcript.video_source.video.id
-                            semantic_scores_by_video_id[video_id] = max(semantic_scores_by_video_id[video_id], semantic_score)
-                    except Transcript.DoesNotExist:
-                        print(f"RARAgent: Transcript ID {transcript_id} from semantic search not found in DB.")
-
-
-        # --- 2. Keyword Scoring & Combining with Semantic Scores ---
-        final_ranked_items = [] # Will store dicts of {'video_id': X, 'combined_score': Y}
-
-        # Create a map of Papri Video ID to its sources for quick lookup
-        video_id_to_sources_map = defaultdict(list)
-        for vs_obj in persisted_video_source_objects:
-            if vs_obj.video:
-                video_id_to_sources_map[vs_obj.video.id].append(vs_obj)
+        final_ranked_items_with_scores = [] # THIS WILL BE RETURNED
         
-        # Get unique Papri Video objects to score
-        unique_papri_videos = {vs_obj.video for vs_obj in persisted_video_source_objects if vs_obj.video}
+        unique_papri_video_ids_to_score = set(candidate_video_papri_ids)
+        unique_papri_video_ids_to_score.update(semantic_scores_by_video_id.keys())
 
-        for papri_video in unique_papri_videos:
+        if not unique_papri_video_ids_to_score:
+            print("RARAgent: No candidate videos to rank.")
+            return [] # Return empty list of dicts
+
+        videos_to_score = Video.objects.filter(id__in=list(unique_papri_video_ids_to_score)).prefetch_related(
+            'sources__transcripts__keywords' # Prefetch for keyword gathering
+        )
+
+        for papri_video in videos_to_score:
+            # ... (keyword_score calculation as before) ...
             keyword_score = 0
             video_collected_keywords = set()
+            for vs_obj in papri_video.sources.all():
+                analysis_for_this_source = all_analysis_data.get(vs_obj.id)
+                if analysis_for_this_source and analysis_for_this_source.get('transcript_analysis', {}).get('status') == 'processed':
+                    video_collected_keywords.update(k.lower() for k in analysis_for_this_source['transcript_analysis'].get('keywords', []))
+                # Fallback to DB if not in all_analysis_data (though ideally it should be)
+                elif not analysis_for_this_source:
+                    for transcript in vs_obj.transcripts.filter(processing_status='processed'):
+                         video_collected_keywords.update(kw.keyword_text.lower() for kw in transcript.keywords.all())
 
-            # Iterate through all sources of this canonical Papri Video
-            for vs_obj in video_id_to_sources_map.get(papri_video.id, []):
-                # Get keywords from transcript analysis for this source
-                analysis_data_for_source = all_analysis_data.get(vs_obj.id, {})
-                transcript_analysis = analysis_data_for_source.get('transcript_analysis', {})
-                if transcript_analysis and transcript_analysis.get('status') == 'processed':
-                    video_collected_keywords.update(k.lower() for k in transcript_analysis.get('keywords', []))
+            if papri_video.title: video_collected_keywords.update(word.lower() for word in papri_video.title.split())
+            if papri_video.description: video_collected_keywords.update(word.lower() for word in papri_video.description.split()[:50])
 
-            # Add keywords from the canonical Video's title and description
-            if papri_video.title:
-                video_collected_keywords.update(word.lower() for word in papri_video.title.split())
-            if papri_video.description:
-                video_collected_keywords.update(word.lower() for word in papri_video.description.split()[:50])
-
-            # Calculate keyword score
             if query_keywords:
                 matching_keywords = query_keywords.intersection(video_collected_keywords)
                 keyword_score = len(matching_keywords)
                 if processed_query_data.get('processed_query') and papri_video.title and \
                    processed_query_data['processed_query'].lower() in papri_video.title.lower():
-                    keyword_score += 5 # Title phrase match bonus
+                    keyword_score += 5
 
-            # Get semantic score for this papri_video.id
             semantic_score_for_video = semantic_scores_by_video_id.get(papri_video.id, 0.0)
-
-            # --- Combine Scores (Example: weighted sum) ---
-            # Weights can be tuned. E.g., semantic score might be 0.0 to 1.0, keyword_score is count.
-            # Normalize keyword score or use semantic score as a multiplier/boost.
-            # Simple combination for now:
-            combined_score = (keyword_score * 0.4) + (semantic_score_for_video * 0.6 * 10) # Scale semantic score contribution
             
-            # Add publication date for tie-breaking
+            KW_WEIGHT = 0.4; SEM_WEIGHT = 0.6 
+            combined_score = (keyword_score * KW_WEIGHT) + (float(semantic_score_for_video) * 10 * SEM_WEIGHT)
             pub_date = papri_video.publication_date if papri_video.publication_date else timezone.datetime.min.replace(tzinfo=timezone.utc)
-
-            final_ranked_items.append({
-                'video_id': papri_video.id,
+            
+            final_ranked_items_with_scores.append({ # Store dict with score
+                'video_id': papri_video.id, 
                 'combined_score': combined_score,
-                'keyword_score': keyword_score,
-                'semantic_score': semantic_score_for_video,
-                'publication_date': pub_date
+                'keyword_score': keyword_score, 
+                'semantic_score': float(semantic_score_for_video),
+                'publication_date': pub_date # Keep for sorting
             })
 
-        # Sort by combined_score (desc), then publication_date (desc)
-        final_ranked_items.sort(key=lambda x: (x['combined_score'], x['publication_date']), reverse=True)
+        # Sort by combined_score, then publication_date
+        final_ranked_items_with_scores.sort(key=lambda x: (x['combined_score'], x['publication_date']), reverse=True)
         
-        ranked_papri_video_ids = [item['video_id'] for item in final_ranked_items]
-        
-        if not ranked_papri_video_ids and not query_keywords and not query_embedding and persisted_video_source_objects:
-             # Fallback to just date sort if no query terms at all AND some videos were persisted
-            print("RARAgent: No query terms for ranking, falling back to date sort of persisted videos.")
-            sorted_sources_by_date = sorted(
-                [p_vid for p_vid in unique_papri_videos if p_vid.publication_date is not None],
-                key=lambda v: v.publication_date,
-                reverse=True
+        # Fallback sort if no scores (e.g., no query terms, no semantic hits)
+        if not any(item['combined_score'] > 0 for item in final_ranked_items_with_scores) and not query_keywords and not query_embedding:
+            print("RARAgent: No scores for ranking, attempting fallback date sort.")
+            # We already have Video objects in videos_to_score
+            sorted_videos_by_date = sorted(
+                [v for v in videos_to_score if v.publication_date is not None],
+                key=lambda v: v.publication_date, reverse=True
             )
-            ranked_papri_video_ids.extend([v.id for v in sorted_sources_by_date])
-            # Add videos with no publication date at the end
-            ranked_papri_video_ids.extend([v.id for v in unique_papri_videos if v.publication_date is None and v.id not in ranked_papri_video_ids])
+            # Rebuild final_ranked_items_with_scores based on this date sort
+            temp_ranked_items = [{'video_id': v.id, 'combined_score': 0, 'publication_date': v.publication_date} for v in sorted_videos_by_date]
+            temp_ranked_items.extend(
+                {'video_id': v.id, 'combined_score': 0, 'publication_date': timezone.datetime.min.replace(tzinfo=timezone.utc)}
+                for v in videos_to_score if v.publication_date is None and v.id not in {item['video_id'] for item in temp_ranked_items}
+            )
+            final_ranked_items_with_scores = temp_ranked_items
 
 
-        print(f"RARAgent: Ranking complete. Scores combined. Returning {len(ranked_papri_video_ids)} unique Papri Video IDs.")
-        if len(final_ranked_items) < 5: # Log details for small result sets
-            for item in final_ranked_items[:5]:
-                print(f"  Ranked Item: VideoID={item['video_id']}, CombinedScore={item['combined_score']:.2f} (K:{item['keyword_score']}, S:{item['semantic_score']:.2f}), Date:{item['publication_date']}")
-
-        return ranked_papri_video_ids
+        print(f"RARAgent: Ranking complete. Returning {len(final_ranked_items_with_scores)} items with scores.")
+        for item in final_ranked_items_with_scores[:5]:
+             print(f"  Ranked Item: VideoID={item['video_id']}, CombinedScore={item['combined_score']:.2f} (K:{item['keyword_score']}, S:{item['semantic_score']:.2f})")
+        
+        return final_ranked_items_with_scores # Return list of dicts
 
     def perform_deduplication(self, video_source_objects):
         """
