@@ -164,51 +164,51 @@ class VideoResultSerializer(serializers.ModelSerializer):
             'created_at'
         ]
 
-
-
+# backend/api/views.py
 class SearchResultsView(views.APIView):
-    permission_classes = [AllowAny]
-
+    # ... (permission_classes, get method signature) ...
     def get(self, request, task_id, *args, **kwargs):
-        # ... (try, task_id_uuid, search_task, permission checks as before) ...
+        # ... (try, task_id_uuid, search_task, permission checks) ...
         try:
             task_id_uuid = uuid.UUID(task_id)
             search_task = get_object_or_404(SearchTask, id=task_id_uuid)
             # ... permission checks ...
 
-            if search_task.status not in ['completed', 'partial_results']:
-                return Response({"error": "Search not complete.", "status": search_task.status}, status=status.HTTP_202_ACCEPTED)
+            if search_task.status not in ['completed', 'partial_results']: # ...
+                return Response({"error": "Search not complete."}, status=status.HTTP_202_ACCEPTED)
 
-            video_ids_ordered = search_task.result_video_ids_json
-            if not video_ids_ordered:
-                return Response({"results_data": []}, status=status.HTTP_200_OK) # Return empty list if no IDs
+            video_ids_ordered = search_task.result_video_ids_json # This is the primary order
+            if not video_ids_ordered: return Response({"results_data": []}, status=status.HTTP_200_OK)
 
-            # Fetch videos and preserve order
-            videos_queryset = Video.objects.filter(id__in=video_ids_ordered).prefetch_related(
-                'sources', 
-                # If you need keywords/transcripts directly on result cards, prefetch them too:
-                # 'sources__transcripts__keywords' 
-            )
+            videos_queryset = Video.objects.filter(id__in=video_ids_ordered).prefetch_related('sources')
             videos_dict = {video.id: video for video in videos_queryset}
-            ordered_videos_with_data = []
-
-            # If you stored results_with_scores from the orchestrator in SearchTask (e.g., as another JSONField)
-            # you could retrieve it here to add scores to the serialized output.
-            # For now, we'll assume scores aren't directly passed, but order is preserved.
             
+            # Try to get detailed scores if stored (assuming you added detailed_ranking_info_json to SearchTask)
+            # detailed_scores_map = {}
+            # if hasattr(search_task, 'detailed_ranking_info_json') and search_task.detailed_ranking_info_json:
+            #     for item in search_task.detailed_ranking_info_json: # This was 'results_data_detailed' from orchestrator
+            #         detailed_scores_map[item['video_id']] = {
+            #             'combined_score': item['combined_score'],
+            #             'match_types': item.get('match_types', [])
+            #         }
+            
+            ordered_videos_with_extra_data = []
             for vid_id in video_ids_ordered:
                 video = videos_dict.get(vid_id)
                 if video:
-                    # You could try to find the score if 'results_with_scores' was stored on SearchTask
-                    # For this example, we'll skip adding the score to the Video object directly for serialization
-                    # and rely on the frontend to just display in the received order.
-                    # If you had scores: video.relevance_score = found_score 
-                    ordered_videos_with_data.append(video)
+                    # Add score and match_types to the video object before serialization
+                    # score_info = detailed_scores_map.get(vid_id)
+                    # video.relevance_score = score_info['combined_score'] if score_info else 0.0
+                    # video.match_types = score_info['match_types'] if score_info else []
+                    # For now, without storing detailed_ranking_info_json on SearchTask directly, these will be empty:
+                    video.relevance_score = 0.0 # Placeholder
+                    video.match_types = []      # Placeholder
+                    ordered_videos_with_extra_data.append(video)
             
-            results_serializer = VideoResultSerializer(ordered_videos_with_data, many=True)
+            results_serializer = VideoResultSerializer(ordered_videos_with_extra_data, many=True)
+            # ... (return Response with results_serializer.data)
             return Response({
-                "message": "Results fetched successfully.", "task_id": str(search_task.id),
+                "message": "Results fetched.", "task_id": str(search_task.id),
                 "status": search_task.status, "query": search_task.query_text or search_task.query_image_ref,
                 "results_data": results_serializer.data
             }, status=status.HTTP_200_OK)
-
