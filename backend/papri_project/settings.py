@@ -289,4 +289,24 @@ CELERY_RESULT_EXTENDED = True # To store more metadata about tasks
 *Install Celery and Redis client for Python: `pip install celery redis`*
 *If using `django-celery-results` for storing results in Django DB (alternative to Redis result backend): `pip install django-celery-results` and add `'django_celery_results'` to `INSTALLED_APPS`.*
 
+# backend/papri_project/settings.py
+# ... other settings ...
+
+# Qdrant Vector Database Configuration
+QDRANT_HOST = os.getenv('QDRANT_HOST', 'localhost')
+QDRANT_PORT = int(os.getenv('QDRANT_HTTP_PORT', 6334)) # Using HTTP port for REST client, or 6333 for gRPC
+QDRANT_GRPC_PORT = int(os.getenv('QDRANT_GRPC_PORT', 6333))
+QDRANT_API_KEY = os.getenv('QDRANT_API_KEY', None) # If using Qdrant Cloud with an API key
+QDRANT_COLLECTION_TRANSCRIPTS = "papri_transcript_embeddings"
+QDRANT_COLLECTION_VISUAL = "papri_visual_embeddings" # For later
+
+# If using local Qdrant via HTTP/REST (simpler client setup sometimes)
+QDRANT_URL = os.getenv('QDRANT_URL', f"http://{QDRANT_HOST}:{QDRANT_PORT}")
+
+
+# Sentence Transformer Model (ensure this is consistent)
+SENTENCE_TRANSFORMER_MODEL = 'all-MiniLM-L6-v2'
+# EMBEDDING_DIMENSION will be derived from the model, but can be set if known
+# EMBEDDING_DIMENSION = 384 # For 'all-MiniLM-L6-v2'
+
 # ... rest of settings ...
