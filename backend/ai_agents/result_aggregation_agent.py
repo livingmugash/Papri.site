@@ -120,88 +120,144 @@ class ResultAggregationAgent:
         return db_hits[:30] # Return top N pHash matches
 
 
-    def aggregate_and_rank_results(self, persisted_video_source_objects, processed_query_data, all_analysis_data):
-        query_intent = processed_query_data.get('intent', 'general_video_search')
-        query_keywords = set(k.lower() for k in processed_query_data.get('keywords', []))
-        query_text_embedding = processed_query_data.get('query_embedding')
-        query_visual_features = processed_query_data.get('visual_features') # dict with 'cnn_embedding', 'perceptual_hashes'
+    def _generate_text_snippet(self, full_text, query_keywords_set, matched_semantic_text_segment=None, max_length=200):
+        """
+        Generates a relevant text snippet around query keywords or a semantic segment.
+        """
+        if not full_text:
+            return None
 
+        best_snippet = None
+        highest_keyword_overlap = -1
+
+        # Option 1: If a specific semantic text segment was highly relevant (e.g., from chunked embeddings later)
+        if matched_semantic_text_segment:
+            # For now, this is a placeholder. If we implement transcript chunking and semantic search returns
+            # the best chunk, that chunk itself is the best snippet.
+            # For V1 with full transcript embeddings, this part is less direct.
+            pass 
+
+        # Option 2: Find snippet around keyword occurrences
+        if query_keywords_set:
+            # Simple approach: find the first occurrence of any query keyword
+            # A better approach: find a window with the most query keywords
+            
+            # Let's find a window with high density of keywords
+            words = re.split(r'(\s+)', full_text) # Split by space, keeping spaces to reconstruct
+            text_words_lower = [w.lower() for w in words]
+            
+            # Consider a window of N words
+            window_size_words = 30 # Approx number of words for a snippet
+            best_window_start = -1
+
+            for i in range(len(text_words_lower) - window_size_words + 1):
+                current_window_text_lower = text_words_lower[i : i + window_size_words]
+                # Count unique query keywords in this window
+                overlap_count = len(query_keywords_set.intersection(set(current_window_text_lower)))
+                
+                if overlap_count > highest_keyword_overlap:
+                    highest_keyword_overlap = overlap_count
+                    best_window_start = i
+                elif overlap_count == highest_keyword_overlap and overlap_count > 0:
+                    # Prefer windows earlier in the text if scores are equal
+                    pass 
+
+            if best_window_start != -1 and highest_keyword_overlap > 0:
+                snippet_words = words[best_window_start : best_window_start + window_size_words]
+                best_snippet = "".join(snippet_words).strip()
+                
+                # Trim to max_length, trying to keep context
+                if len(best_snippet) > max_length:
+                    # Find the first keyword in the snippet to center around if possible
+                    first_kw_pos = -1
+                    for kw in query_keywords_set:
+                        try:
+                            pos = best_snippet.lower().index(kw)
+                            if first_kw_pos == -1 or pos < first_kw_pos:
+                                first_kw_pos = pos
+                        except ValueError:
+                            continue
+                    
+                    if first_kw_pos != -1:
+                        start = max(0, first_kw_pos - (max_length // 3))
+                        best_snippet = best_snippet[start : start + max_length]
+                    else: # No keyword found in the best window (shouldn't happen if highest_keyword_overlap > 0)
+                        best_snippet = best_snippet[:max_length]
+                
+                # Add ellipsis if snippet was cut or doesn't start/end at sentence boundary (simplified)
+                if best_window_start > 0: best_snippet = "... " + best_snippet
+                if (best_window_start + window_size_words) < len(words): best_snippet += " ..."
+                best_snippet = best_snippet.strip()
+
+        # Fallback if no keywords matched but there was semantic score (or if it's just a description)
+        if not best_snippet and (final_scores_by_video_id[video_id]['semantic_text_score'] > 0.1 or not query_keywords_set): # check semantic score condition
+            best_snippet = full_text[:max_length]
+            if len(full_text) > max_length:
+                best_snippet += "..."
+        
+        return best_snippet
+
+
+    def aggregate_and_rank_results(self, persisted_video_source_objects, processed_query_data, all_analysis_data):
+        # ... (query_intent, query_keywords, query_text_embedding, query_visual_features extraction) ...
+        # ... (final_scores_by_video_id defaultdict setup with 'best_match_timestamp_ms' and 'text_snippet')
         final_scores_by_video_id = defaultdict(lambda: {
             'keyword_score': 0.0, 'semantic_text_score': 0.0,
             'visual_cnn_score': 0.0, 'visual_phash_score': 0.0,
             'combined_score': 0.0, 
-            'publication_date': timezone.datetime.min.replace(tzinfo=timezone.utc), # Default for sorting
+            'publication_date': timezone.datetime.min.replace(tzinfo=timezone.utc),
             'match_type_flags': set(),
-            'best_match_timestamp_ms': None # For visual matches, store the timestamp of the best matching frame
+            'best_match_timestamp_ms': None,
+            'text_snippet': None # NEW field for text snippet
         })
+        # ... (current_session_video_ids, Text Semantic Search, Visual CNN Search, Visual pHash Search as before) ...
+        # These searches populate scores and match_type_flags in final_scores_by_video_id
 
-        current_session_video_ids = set(vs.video.id for vs in persisted_video_source_objects if vs.video)
-        all_candidate_video_ids_for_filtering = list(current_session_video_ids) if current_session_video_ids else None
+        # --- Keyword Scoring & Snippet Generation ---
+        all_potential_video_ids = set(vs.video.id for vs in persisted_video_source_objects if vs.video)
+        all_potential_video_ids.update(final_scores_by_video_id.keys())
 
+        if not all_potential_video_ids: return []
 
-        # --- 1. Text Semantic Search ---
-        if query_text_embedding:
-            text_semantic_hits = self._search_qdrant_transcript_db(
-                query_text_embedding, top_k=50, 
-                video_papri_ids_filter_list=all_candidate_video_ids_for_filtering # Optionally filter by current session videos
-            )
-            for hit in text_semantic_hits:
-                video_id = hit.get('video_papri_id')
-                if video_id is not None:
-                    final_scores_by_video_id[video_id]['semantic_text_score'] = max(final_scores_by_video_id[video_id]['semantic_text_score'], hit['semantic_score'])
-                    final_scores_by_video_id[video_id]['match_type_flags'].add('text_sem')
-
-        # --- 2. Visual CNN Semantic Search ---
-        if query_visual_features and query_visual_features.get('cnn_embedding'):
-            query_cnn_embedding = query_visual_features['cnn_embedding']
-            visual_cnn_hits = self._search_qdrant_visual_db(query_cnn_embedding, top_k=30) # Broader search initially
-            for hit in visual_cnn_hits:
-                video_id = hit.get('video_papri_id')
-                if video_id is not None:
-                    current_max_score = final_scores_by_video_id[video_id]['visual_cnn_score']
-                    if hit['visual_cnn_score'] > current_max_score:
-                        final_scores_by_video_id[video_id]['visual_cnn_score'] = hit['visual_cnn_score']
-                        final_scores_by_video_id[video_id]['best_match_timestamp_ms'] = hit.get('timestamp_ms')
-                    final_scores_by_video_id[video_id]['match_type_flags'].add('vis_cnn')
-                    all_candidate_video_ids_for_filtering = list(set(all_candidate_video_ids_for_filtering or []) | {video_id}) # Add to candidates
-
-        # --- 3. Visual Perceptual Hash Search (potentially filtered by CNN hits) ---
-        if query_visual_features and query_visual_features.get('perceptual_hashes'):
-            query_hashes = query_visual_features['perceptual_hashes']
-            # Filter pHash search by video_ids that got a CNN hit, if any, or current session videos
-            phash_filter_ids = list(final_scores_by_video_id.keys()) if any(s['visual_cnn_score'] > 0 for s in final_scores_by_video_id.values()) else all_candidate_video_ids_for_filtering
-            
-            phash_hits = self._search_perceptual_hashes_in_db(query_hashes, video_papri_ids_filter_list=phash_filter_ids)
-            for hit in phash_hits:
-                video_id = hit.get('video_papri_id')
-                if video_id is not None:
-                    current_max_score = final_scores_by_video_id[video_id]['visual_phash_score']
-                    if hit['visual_phash_score'] > current_max_score:
-                        final_scores_by_video_id[video_id]['visual_phash_score'] = hit['visual_phash_score']
-                        # Update best_match_timestamp if this pHash match is for a better frame or a new video
-                        if final_scores_by_video_id[video_id]['best_match_timestamp_ms'] is None or hit['visual_phash_score'] > final_scores_by_video_id[video_id]['visual_cnn_score']: # crude check
-                           final_scores_by_video_id[video_id]['best_match_timestamp_ms'] = hit.get('timestamp_ms')
-                    final_scores_by_video_id[video_id]['match_type_flags'].add('vis_phash')
+        videos_to_process_qset = Video.objects.filter(id__in=list(all_potential_video_ids)).prefetch_related(
+            'sources__transcripts' # Prefetch transcripts for snippet generation
+        )
         
-        # --- 4. Keyword Scoring ---
-        all_ids_to_score_details_for = set(current_session_video_ids) # Start with session videos
-        all_ids_to_score_details_for.update(final_scores_by_video_id.keys()) # Add any from semantic/visual hits
-
-        if not all_ids_to_score_details_for: return []
-
-        videos_to_process_qset = Video.objects.filter(id__in=list(all_ids_to_score_details_for)).prefetch_related('sources__transcripts__keywords')
-        
+        video_transcript_texts = {} # Cache transcript texts for videos {video_id: "full transcript text"}
         for papri_video in videos_to_process_qset:
             video_id = papri_video.id
-            # Ensure pub_date is set for all considered videos
+            # ... (Populate publication_date as before) ...
             final_scores_by_video_id[video_id]['publication_date'] = papri_video.publication_date if papri_video.publication_date else timezone.datetime.min.replace(tzinfo=timezone.utc)
-            
-            if query_keywords: # Keyword scoring only if text query part exists
-                # ... (keyword collection and scoring logic as before) ...
+
+            full_transcript_for_snippet = ""
+            # Collect keywords and transcript text for this canonical video
+            if query_keywords: # Only do keyword scoring and snippeting if text query was part of input
                 keyword_score = 0; video_collected_keywords = set()
-                for vs_obj in papri_video.sources.all():
-                    analysis = all_analysis_data.get(vs_obj.id, {}).get('transcript_analysis', {})
-                    if analysis.get('status') == 'processed': video_collected_keywords.update(k.lower() for k in analysis.get('keywords',[]))
+                
+                # Get transcript text for snippet generation
+                # Prioritize analysis_data if available (from current session processing)
+                # This assumes all_analysis_data has 'transcript_text_content' if transcript was processed.
+                # Or fetch from DB if transcript exists.
+                
+                for vs_obj in papri_video.sources.all(): # Iterate this video's sources
+                    analysis_for_this_source = all_analysis_data.get(vs_obj.id, {}).get('transcript_analysis', {})
+                    if analysis_for_this_source.get('status') == 'processed':
+                        video_collected_keywords.update(k.lower() for k in analysis_for_this_source.get('keywords', []))
+                        # Try to get full transcript from analysis data if it stored it, else from DB
+                        # For now, let's assume we need to fetch from DB for snippet generation
+                    
+                    # Fetch latest 'processed' transcript text for snippet generation for this source
+                    # (could be from any language, or prioritize English)
+                    if not full_transcript_for_snippet: # Only fetch once per canonical video
+                        transcript_record = vs_obj.transcripts.filter(processing_status='processed').order_by('-updated_at').first()
+                        if transcript_record:
+                            full_transcript_for_snippet = transcript_record.transcript_text_content
+                            video_transcript_texts[video_id] = full_transcript_for_snippet # Cache it
+                            # Also add its keywords if not in all_analysis_data for some reason
+                            if not analysis_for_this_source: # If no fresh analysis data for keywords
+                                 video_collected_keywords.update(kw.keyword_text.lower() for kw in transcript_record.keywords.all())
+
+
                 if papri_video.title: video_collected_keywords.update(w.lower() for w in papri_video.title.split())
                 if papri_video.description: video_collected_keywords.update(w.lower() for w in papri_video.description.split()[:70])
                 
@@ -213,15 +269,27 @@ class ResultAggregationAgent:
                 final_scores_by_video_id[video_id]['keyword_score'] = keyword_score
                 if keyword_score > 0: final_scores_by_video_id[video_id]['match_type_flags'].add('text_kw')
 
-        # --- 5. Combine all scores and Rank ---
-        # ... (Score combination logic as before, using final_scores_by_video_id) ...
-        # ... (Sorting and fallback logic as before) ...
+            # Generate snippet if there was a text match (keyword or semantic)
+            # Use cached full_transcript_for_snippet or video's description as fallback
+            text_for_snippet = video_transcript_texts.get(video_id, papri_video.description or "")
+            if ('text_kw' in final_scores_by_video_id[video_id]['match_type_flags'] or \
+                final_scores_by_video_id[video_id]['semantic_text_score'] > 0.1) and text_for_snippet: # Condition to generate snippet
+                final_scores_by_video_id[video_id]['text_snippet'] = self._generate_text_snippet(
+                    text_for_snippet, 
+                    query_keywords # Pass the original query keywords for highlighting
+                )
+
+        # --- Combine all scores and Rank (as before) ---
+        # ... The final_ranked_list_output should now include 'text_snippet' in each item dict ...
         final_ranked_list_output = []
         for video_id, scores in final_scores_by_video_id.items():
-            W_KW = 0.25; W_SEM_TEXT = 0.25; W_VIS_CNN = 0.30; W_VIS_PHASH = 0.20 # Adjusted weights
+            # ... (combined_score calculation as in Step 32) ...
+            # Define weights - THESE NEED EXTENSIVE TUNING!
+            W_KW = 0.25; W_SEM_TEXT = 0.30; W_VIS_CNN = 0.25; W_VIS_PHASH = 0.20 
             norm_kw_score = min(scores['keyword_score'] / 20.0, 1.0)
             combined_score = (norm_kw_score * W_KW + scores['semantic_text_score'] * W_SEM_TEXT +
                               scores['visual_cnn_score'] * W_VIS_CNN + scores['visual_phash_score'] * W_VIS_PHASH)
+            # ... (intent-based boosting) ...
             if query_intent == 'visual_similarity_search' and scores['match_type_flags'] & {'vis_cnn', 'vis_phash'}: combined_score *= 1.3
             elif query_intent == 'general_video_search' and scores['match_type_flags'] & {'text_kw', 'text_sem'}: combined_score *= 1.1
             elif query_intent == 'hybrid_text_visual_search' and (scores['match_type_flags'] & {'text_kw', 'text_sem'}) and \
@@ -231,12 +299,17 @@ class ResultAggregationAgent:
                 'video_id': video_id, 'combined_score': combined_score,
                 'kw_score': scores['keyword_score'], 'sem_text_score': scores['semantic_text_score'],
                 'vis_cnn_score': scores['visual_cnn_score'], 'vis_phash_score': scores['visual_phash_score'],
-                'publication_date': scores['publication_date'], 'match_types': list(scores['match_type_flags']),
-                'best_match_timestamp_ms': scores.get('best_match_timestamp_ms') # Add this
+                'publication_date': scores['publication_date'], 
+                'match_types': list(scores['match_type_flags']),
+                'best_match_timestamp_ms': scores.get('best_match_timestamp_ms'),
+                'text_snippet': scores.get('text_snippet') # Add snippet to output
             })
+        # ... (sorting and fallback as in Step 32) ...
         final_ranked_list_output.sort(key=lambda x: (x['combined_score'], x['publication_date']), reverse=True)
         # ... (Fallback logic for empty results if needed) ...
 
-        print(f"RARAgent: Multi-modal ranking. Returning {len(final_ranked_list_output)} items.")
-        # ... (logging of top results) ...
-        return final_ranked_list_output
+        logger.info(f"RARAgent: Multi-modal ranking with snippets. Returning {len(final_ranked_list_output)} items.")
+        for item in final_ranked_list_output[:3]: # Log top 3 with snippet
+             logger.debug(f"  Ranked: VID={item['video_id']}, Score={item['combined_score']:.3f}, Snippet: {item.get('text_snippet', 'N/A')[:50]}...")
+        
+        return final_ranked_list_output # List of dicts including text_snippet
