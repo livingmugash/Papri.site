@@ -24,6 +24,36 @@ class PapriAIAgentOrchestrator:
         # ... (3. Persist Basic Video Info -> persisted_video_source_objects)
         # ... (4. Content Analysis -> all_analysis_data)
         # (Code for steps 1-4 largely remains the same from Step 25 / previous versions)
+        # 5. Result Aggregation & Ranking
+        ranked_results_details = []
+        try:
+            # Pass the filters from the initial search parameters
+            # RARAgent will also need processed_query_data for query terms/embeddings
+            # and all_analysis_data for keywords from transcripts of currently fetched videos
+            current_filters = search_parameters.get('applied_filters', {})
+
+            ranked_results_details = self.ra_agent.aggregate_and_rank_results(
+                persisted_video_source_objects, 
+                processed_query_data,
+                all_analysis_data,
+                filters=current_filters # NEW: Pass filters
+            )
+        except Exception as e:
+            # ... (fallback) ...
+            logger.error(f"Orchestrator: Error in RARAgent: {e}", exc_info=True)
+            ranked_results_details = [{'video_id': vs.video.id, 'combined_score': 0.0, 'match_types': ['fallback_fetch'], 'best_match_timestamp_ms': None} for vs in persisted_video_source_objects if vs.video]
+
+        final_ranked_video_ids = [item['video_id'] for item in ranked_results_details]
+        # ... (return dict as before, including "results_data_detailed": ranked_results_details) ...
+        return {
+            "message": "Search orchestrated.",
+            "items_fetched_from_sources": len(raw_video_data_from_sources if 'raw_video_data_from_sources' in locals() else []),
+            "items_analyzed_for_content": len(all_analysis_data if 'all_analysis_data' in locals() else {}),
+            "ranked_video_count": len(final_ranked_video_ids),
+            "persisted_video_ids_ranked": final_ranked_video_ids,
+            "results_data_detailed": ranked_results_details
+        }
+
         try:
             if search_parameters.get('query_text') and search_parameters.get('query_image_ref'):
                 text_data = self.q_agent.process_text_query(search_parameters['query_text'])
