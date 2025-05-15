@@ -245,84 +245,141 @@ def process_transcript_for_video_source(self, video_source_obj, raw_video_data_i
         return [kw for kw, count in keyword_counts.most_common(num_keywords)]
 
 
-    def process_transcript_for_video_source(self, video_source_obj, raw_video_data_item):
+    def _fetch_and_parse_vtt_url(self, vtt_url):
         """
-        Fetches/processes transcript, extracts keywords, and saves them.
-        video_source_obj: The VideoSource Django model instance.
-        raw_video_data_item: Data from SOIAgent, might contain platform_video_id.
-        Returns a dict of analysis results or None.
+        Downloads a VTT file from a URL and parses it into plain text.
+        Returns plain text, or None if fetching/parsing fails.
         """
-        full_text_transcript = None
-        timed_transcript_json = None
-        lang_code = 'en' # Default
+        try:
+            self.logger.info(f"TranscriptAnalyzer: Fetching VTT from URL: {vtt_url}")
+            response = requests.get(vtt_url, timeout=10)
+            response.raise_for_status() # Raise an exception for HTTP errors
+            
+            vtt_content = response.text
+            captions = webvtt.read_buffer(StringIO(vtt_content)) # webvtt.read_buffer expects a file-like object
+            # Or, if webvtt.from_string is available and preferred:
+            # captions = webvtt.from_string(vtt_content)
 
+            full_text_parts = []
+            timed_segments = [] # Optional: if you want to store timed segments from VTT
+
+            for caption in captions:
+                # caption.text often contains the lines separated by \n, clean it up.
+                # Also, VTT can have styling or metadata within the text.
+                # A simple approach is to join lines and strip HTML-like tags.
+                clean_text = caption.text.replace('\n', ' ').strip()
+                # Basic cleaning of VTT cue settings/tags if any (e.g. <v User>Text</v>)
+                clean_text = re.sub(r'<[^>]+>', '', clean_text) 
+                full_text_parts.append(clean_text)
+                
+                # Optional: extract timing info if needed for transcript_timed_json
+                # start_ms = int(caption.start_in_seconds * 1000)
+                # end_ms = int(caption.end_in_seconds * 1000)
+                # timed_segments.append({'text': clean_text, 'start': start_ms, 'duration': end_ms - start_ms})
+
+            full_text = " ".join(full_text_parts).strip()
+            self.logger.info(f"TranscriptAnalyzer: Successfully parsed VTT from {vtt_url}. Length: {len(full_text)}")
+            # return full_text, timed_segments # If returning timed segments
+            return full_text, None # For now, just full text and None for timed_json from VTT
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"TranscriptAnalyzer: Failed to download VTT file from {vtt_url}: {e}")
+            return None, None
+        except webvtt.errors.MalformedCaptionError as e: # Catch specific webvtt parsing errors
+            self.logger.error(f"TranscriptAnalyzer: Malformed VTT content from {vtt_url}: {e}")
+            return None, None
+        except Exception as e:
+            self.logger.error(f"TranscriptAnalyzer: Error processing VTT file from {vtt_url}: {e}")
+            return None, None
+
+
+    def process_transcript_for_video_source(self, video_source_obj, raw_video_data_item):
+        full_text_transcript = None
+        timed_transcript_json = None # This will store list of dicts like {'text':.., 'start':.., 'duration':..}
+        lang_code = raw_video_data_item.get('language_code', 'en') # Get lang from item if scraper provided it
+
+        # Attempt to get transcript based on platform
         if video_source_obj.platform_name == 'YouTube':
             youtube_video_id = video_source_obj.platform_video_id
             if youtube_video_id:
-                full_text_transcript, lang_code, timed_transcript_json = self._fetch_youtube_transcript(youtube_video_id)
-            else:
-                print(f"TranscriptAnalyzer: Missing YouTube video ID for VideoSource {video_source_obj.id}")
-                return None
-        # TODO: Add transcript fetching logic for Vimeo, Dailymotion, etc.
-        # Vimeo API might provide text tracks. Dailymotion is less clear on public transcript APIs.
-        # This might involve scraping or checking raw_video_data_item for transcript info.
-        else:
-            print(f"TranscriptAnalyzer: Transcript processing not yet implemented for platform: {video_source_obj.platform_name}")
-            # For now, we can try to extract keywords from description if no transcript
-            if raw_video_data_item and raw_video_data_item.get('description'):
-                print(f"TranscriptAnalyzer: Using description for keyword extraction for {video_source_obj.platform_name}")
-                full_text_transcript = raw_video_data_item.get('description')
-                # lang_code might need detection if not 'en'
-            else:
-                 return None # No transcript and no description
+                full_text_transcript, lang_code_yt, timed_transcript_json_yt = self._fetch_youtube_transcript(youtube_video_id)
+                if full_text_transcript:
+                    full_text_transcript = full_text_transcript
+                    lang_code = lang_code_yt or lang_code # Prioritize detected lang
+                    timed_transcript_json = timed_transcript_json_yt
+        
+        # Check if scraper provided a VTT URL (e.g., for PeerTube)
+        elif raw_video_data_item.get('transcript_vtt_url'):
+            vtt_url = raw_video_data_item['transcript_vtt_url']
+            # Ensure it's a full URL
+            if not vtt_url.startswith(('http://', 'https://')):
+                parsed_original_url = urlparse(video_source_obj.original_url)
+                vtt_url = urlunparse((parsed_original_url.scheme, parsed_original_url.netloc, vtt_url, '', '', ''))
+
+            full_text_transcript, timed_vtt_segments = self._fetch_and_parse_vtt_url(vtt_url)
+            # lang_code might need to be inferred from VTT or assumed
+            # timed_transcript_json = timed_vtt_segments # If _fetch_and_parse_vtt_url returns it
+
+        # Check if scraper provided direct transcript text
+        elif raw_video_data_item.get('transcript_text'):
+            full_text_transcript = raw_video_data_item['transcript_text']
+            # lang_code might need to be inferred or assumed
+
+        # Fallback to description if no transcript found by other means
+        if not full_text_transcript and raw_video_data_item.get('description'):
+            self.logger.info(f"TranscriptAnalyzer: No transcript found for VSID {video_source_obj.id}, using description.")
+            full_text_transcript = raw_video_data_item.get('description')
+            # lang_code might need detection here if not 'en' and description is in another lang
+
+        lang_code = lang_code or 'und' # Ensure lang_code is not None
 
         if not full_text_transcript:
-            # Update or create Transcript record with 'not_available' status
-            transcript_obj, created = Transcript.objects.update_or_create(
-                video_source=video_source_obj,
-                language_code=lang_code or 'und', # 'und' for undetermined
-                defaults={
-                    'transcript_text_content': "",
-                    'processing_status': 'not_available',
-                    'updated_at': timezone.now()
-                }
+            # ... (Update/create Transcript record with 'not_available' status as before) ...
+            Transcript.objects.update_or_create(
+                video_source=video_source_obj, language_code=lang_code,
+                defaults={'transcript_text_content': "", 'processing_status': 'not_available', 'updated_at': timezone.now()}
             )
-            print(f"TranscriptAnalyzer: No transcript content found or fetched for VideoSource {video_source_obj.id}.")
+            self.logger.info(f"TranscriptAnalyzer: No transcript/description content for VSID {video_source_obj.id}.")
             return {"status": "no_transcript_content"}
 
-        # Save or update the transcript
+        if not video_source_obj.video: # ... (handle error_video_not_linked as before) ...
+            self.logger.error(f"TranscriptAnalyzer: VSID {video_source_obj.id} lacks linked canonical Video.")
+            return {"status": "error_video_not_linked"}
+
         transcript_obj, created = Transcript.objects.update_or_create(
-            video_source=video_source_obj,
-            language_code=lang_code, # Use the detected language code
+            video_source=video_source_obj, language_code=lang_code,
             defaults={
                 'transcript_text_content': full_text_transcript,
-                'transcript_timed_json': timed_transcript_json, # Store timed data if available
-                'processing_status': 'processed', # Mark as processed
-                'quality_score': 0.7 if lang_code and 'en' in lang_code else 0.5, # Dummy quality score
+                'transcript_timed_json': timed_transcript_json, # Store if available
+                'processing_status': 'pending_analysis', 
                 'updated_at': timezone.now()
             }
         )
-        print(f"TranscriptAnalyzer: Transcript {'created' if created else 'updated'} for VideoSource ID {video_source_obj.id}, Lang: {lang_code}")
-
-        # Extract and save keywords
+        # ... (Embedding generation & storage, keyword extraction & storage as before) ...
+        embedding_vector = self._generate_embedding(full_text_transcript)
+        embedding_stored = False
+        if embedding_vector:
+            embedding_stored = self._store_embedding_in_qdrant(transcript_obj.id, video_source_obj.video.id, embedding_vector)
+        
         extracted_keywords_texts = self._extract_keywords(full_text_transcript)
-        
-        # Bulk create keywords for efficiency, avoiding duplicates for this transcript
-        existing_keywords_for_transcript = set(
-            ExtractedKeyword.objects.filter(transcript=transcript_obj).values_list('keyword_text', flat=True)
-        )
-        keywords_to_create = []
-        for kw_text in extracted_keywords_texts:
-            if kw_text not in existing_keywords_for_transcript:
-                keywords_to_create.append(ExtractedKeyword(transcript=transcript_obj, keyword_text=kw_text))
-        
-        if keywords_to_create:
-            ExtractedKeyword.objects.bulk_create(keywords_to_create)
-            print(f"TranscriptAnalyzer: Saved {len(keywords_to_create)} new keywords for Transcript ID {transcript_obj.id}")
+        # ... (keyword saving logic) ...
+        if created:
+            keywords_to_create = [ExtractedKeyword(transcript=transcript_obj, keyword_text=kw_text) for kw_text in extracted_keywords_texts]
+        else:
+            existing_keywords = set(ExtractedKeyword.objects.filter(transcript=transcript_obj).values_list('keyword_text', flat=True))
+            keywords_to_create = [ExtractedKeyword(transcript=transcript_obj, keyword_text=kw) for kw in extracted_keywords_texts if kw not in existing_keywords]
+        if keywords_to_create: ExtractedKeyword.objects.bulk_create(keywords_to_create)
+
+        transcript_obj.processing_status = 'processed' if embedding_stored else 'analysis_failed_embedding_storage'
+        transcript_obj.save(update_fields=['processing_status','updated_at']) # Ensure updated_at is saved
 
         return {
-            "transcript_id": transcript_obj.id,
-            "language_code": lang_code,
-            "keywords": extracted_keywords_texts,
-            "status": "processed"
+            "transcript_id": transcript_obj.id, "language_code": lang_code,
+            "keywords": extracted_keywords_texts, "embedding_generated": bool(embedding_vector),
+            "embedding_stored": embedding_stored, "status": transcript_obj.processing_status
         }
+
+    # Add logger property for easy logging within the class
+    @property
+    def logger(self):
+        import logging
+        return logging.getLogger(__name__)
