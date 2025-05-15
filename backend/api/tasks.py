@@ -116,27 +116,73 @@ def index_video_visual_features(self, video_source_id):
 
 
 
-@shared_task(bind=True, name='api.process_search_query')
+@shared_task(bind=True, name='api.process_search_query', acks_late=True, time_limit=600, max_retries=2, default_retry_delay=60)
 def process_search_query(self, search_task_id):
-    # ... (try block, fetching search_task, search_parameters prep) ...
+    logger.info(f"Celery ProcessSearch: START for STID {search_task_id}. CeleryTaskID: {self.request.id}")
+    search_task = None
     try:
-        # ...
-        orchestrator = PapriAIAgentOrchestrator(papri_search_task_id=search_task_id)
-        orchestration_result = orchestrator.execute_search(search_parameters) # Returns dict
+        search_task = SearchTask.objects.get(id=search_task_id)
+        if search_task.status == 'completed': # Avoid re-processing completed tasks
+            logger.info(f"Celery ProcessSearch: STID {search_task_id} already completed. Skipping.")
+            return {"status": "skipped_already_completed", "search_task_id": str(search_task_id)}
 
-        if orchestration_result and "error" not in orchestration_result:
+        search_task.status = 'processing'
+        search_task.error_message = None # Clear previous errors
+        search_task.save(update_fields=['status', 'error_message'])
+        logger.info(f"Celery ProcessSearch: STID {search_task_id} status -> 'processing'.")
+
+        search_parameters = {
+            'query_text': search_task.query_text,
+            'query_image_ref': search_task.query_image_ref,
+            'applied_filters': search_task.applied_filters_json,
+            'user_id': str(search_task.user_id) if search_task.user else None,
+            'session_id': search_task.session_id,
+        }
+
+        orchestrator = PapriAIAgentOrchestrator(papri_search_task_id=search_task_id)
+        orchestration_result = orchestrator.execute_search(search_parameters)
+
+        logger.info(f"Celery ProcessSearch: STID {search_task_id} Orchestration Result: Fetched={orchestration_result.get('items_fetched_from_sources')}, Analyzed={orchestration_result.get('items_analyzed_for_content')}, Ranked={orchestration_result.get('ranked_video_count')}")
+
+        if orchestration_result and orchestration_result.get("status_code", 200) < 400 and "error" not in orchestration_result : # Check for explicit error or status_code
             search_task.status = 'completed'
             ranked_ids = orchestration_result.get("persisted_video_ids_ranked", [])
-            search_task.result_video_ids_json = ranked_ids 
-            
-            # Optionally store the detailed scores and match types
-            # Add a new JSONField to SearchTask model: e.g., detailed_ranking_info_json
-            search_task.detailed_ranking_info_json = orchestration_result.get("results_data_detailed")
+            search_task.result_video_ids_json = ranked_ids
+            search_task.detailed_results_info_json = orchestration_result.get("results_data_detailed")
+            search_task.error_message = None # Clear any previous error message
         else:
-            # ... (error handling) ...
+            search_task.status = 'failed'
+            error_msg = orchestration_result.get("error", "Unknown error during orchestration.")
+            search_task.error_message = str(error_msg)[:1000] # Max 1000 chars
+            logger.error(f"Celery ProcessSearch: STID {search_task_id} failed orchestration. Error: {error_msg}")
         
         search_task.updated_at = timezone.now()
-        update_fields = ['status', 'error_message', 'updated_at', 'result_video_ids_json']
-        # if 'detailed_ranking_info_json' in locals(): update_fields.append('detailed_ranking_info_json')
-        search_task.save(update_fields=update_fields)
-        # ... (return dict)
+        search_task.save(update_fields=['status', 'error_message', 'updated_at', 'result_video_ids_json', 'detailed_results_info_json'])
+        logger.info(f"Celery ProcessSearch: STID {search_task_id} final status '{search_task.status}'. {len(search_task.result_video_ids_json or [])} results linked.")
+        
+        return {
+            "status": search_task.status, "search_task_id": str(search_task_id),
+            "message": orchestration_result.get("message", search_task.error_message),
+            "ranked_video_count": len(search_task.result_video_ids_json or [])
+        }
+
+    except SearchTask.DoesNotExist:
+        logger.error(f"Celery ProcessSearch: SearchTask ID {search_task_id} not found.")
+        return {"status": "error_task_not_found", "search_task_id": str(search_task_id)}
+    except Exception as e:
+        logger.error(f"Celery ProcessSearch: UNEXPECTED error for STID {search_task_id}: {e}", exc_info=True)
+        if search_task:
+            try:
+                search_task.status = 'failed'
+                search_task.error_message = f"Unexpected Celery Error: {str(e)[:500]}"
+                search_task.updated_at = timezone.now()
+                search_task.save(update_fields=['status', 'error_message', 'updated_at'])
+            except Exception as db_err:
+                logger.error(f"Celery ProcessSearch: Failed to update STID {search_task_id} on error: {db_err}")
+        
+        # Retry for unexpected errors (e.g., temporary network issue, DB deadlock)
+        # Default retry policy from @shared_task will be used if not explicitly raised with self.retry
+        # To prevent retries for application errors caught here, you might 'return' instead of 'raise'
+        # Or use 'raise Ignore()' from celery.exceptions to prevent retry for this specific exception.
+        # For now, let it use default retry behavior.
+        raise # Re-raise to let Celery handle retry based on task decorator settings
