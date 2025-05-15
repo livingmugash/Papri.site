@@ -593,4 +593,30 @@ if (platformFilterValue) resultsUrl += `&platform=${platformFilterValue}`;
 if (durationMin) resultsUrl += `&duration_min=${durationMin}`;
 // ... add other filter/sort params ...
 // const response = await fetch(resultsUrl);
+
+// frontend/static/js/papriapp.js
+// In createResultCardElement_Django(video_result)
+
+    // ... (title, thumbnailUrl, description, publicationDate, sourcePlatform, originalUrl, matchTypes, bestMatchTimestampMs) ...
+    const textSnippet = video_result.text_snippet;
+    let snippetHtml = '';
+    if (textSnippet) {
+        // Sanitize snippet if it might contain user-generated HTML-like content from transcripts
+        // For now, assuming it's plain text.
+        snippetHtml = `<p class="text-xs text-gray-500 mt-1 italic bg-gray-50 p-1 rounded">"${textSnippet.replace(/</g, "&lt;").replace(/>/g, "&gt;")}"</p>`;
+    }
+    // ...
+    // Add snippetHtml to your card.innerHTML, for example, after the description or matchInfoHtml:
+    // card.innerHTML = `
+    //     ...
+    //     <div class="flex-grow min-w-0">
+    //         ... (title, pub_date, description) ...
+    //         ${matchInfoHtml} 
+    //         ${snippetHtml} {/* Display text snippet */}
+    //         <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center mt-2"> 
+    //             ... (buttons) ...
+    //         </div>
+    //     </div>
+    // `;
+    // ...
                     
