@@ -144,6 +144,7 @@ class VideoResultSerializer(serializers.ModelSerializer):
     relevance_score = serializers.FloatField(read_only=True, required=False)
     match_types = serializers.ListField(child=serializers.CharField(), read_only=True, required=False)
     best_match_timestamp_ms = serializers.IntegerField(read_only=True, required=False, allow_null=True) # NEW
+    text_snippet = serializers.CharField(read_only=True, required=False, allow_null=True)
 
     class Meta:
         model = Video
