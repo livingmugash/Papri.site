@@ -14,106 +14,106 @@ from backend.ai_agents.visual_analyzer import VisualAnalyzer
 visual_analyzer_instance = VisualAnalyzer() # Instantiate once
 # T
 
-@shared_task(bind=True, name='api.index_video_visual_features', acks_late=True, time_limit=3600, max_retries=1, default_retry_delay=60*5) # Increased time limit to 1hr, added retry delay
+@shared_task(bind=True, name='api.index_video_visual_features', acks_late=True, time_limit=3600, max_retries=1, default_retry_delay=60*5)
 def index_video_visual_features(self, video_source_id):
-    # ... (VideoSource fetching and initial checks as in Step 31) ...
+    logger.info(f"Celery VisualIndex: START for VSID {video_source_id}. CeleryTaskID: {self.request.id}")
+    video_source = None
     try:
         video_source = VideoSource.objects.select_related('video').get(id=video_source_id)
-        if not video_source.video: # ...
-            video_source.meta_visual_processing_status = 'error_no_papri_video_link'
-            video_source.save(update_fields=['meta_visual_processing_status'])
-            return {"status": "skipped", "reason": "Not linked to Papri Video"}
-        if not video_source.original_url: # ...
-            video_source.meta_visual_processing_status = 'error_no_original_url'
-            video_source.save(update_fields=['meta_visual_processing_status'])
-            return {"status": "skipped", "reason": "No original_url"}
+        # Check if already completed successfully to avoid re-processing unless forced
+        if video_source.meta_visual_processing_status == 'completed' and not self.request.kwargs.get('force_reindex'): # Assuming 'force_reindex' could be a kwarg
+            logger.info(f"Celery VisualIndex: VSID {video_source_id} already completed visual indexing. Skipping.")
+            return {"status": "skipped_already_completed", "video_source_id": video_source_id}
+
+        if not video_source.video:
+            logger.warning(f"Celery VisualIndex: VSID {video_source_id} not linked to a Papri Video. Skipping.")
+            video_source.meta_visual_processing_status = 'error_no_papri_video_link'; video_source.save(update_fields=['meta_visual_processing_status'])
+            return {"status": "skipped_no_papri_video_link"}
+        if not video_source.original_url:
+            logger.warning(f"Celery VisualIndex: VSID {video_source_id} has no original_url. Skipping.")
+            video_source.meta_visual_processing_status = 'error_no_original_url'; video_source.save(update_fields=['meta_visual_processing_status'])
+            return {"status": "skipped_no_original_url"}
 
         video_url = video_source.original_url
         video_source.meta_visual_processing_status = 'downloading'
-        video_source.meta_visual_processing_error = None # Clear previous errors
+        video_source.meta_visual_processing_error = None
         video_source.save(update_fields=['meta_visual_processing_status', 'meta_visual_processing_error'])
 
-        # ... (temp_download_basedir setup) ...
-        temp_download_basedir = os.path.join(settings.MEDIA_ROOT, "temp_video_downloads") # Ensure this exists and is writable
+        # ... (temp_download_basedir setup, output_template, ydl_opts as in Step 31) ...
+        temp_download_basedir = os.path.join(settings.MEDIA_ROOT, "temp_video_downloads")
         os.makedirs(temp_download_basedir, exist_ok=True)
 
         with tempfile.TemporaryDirectory(prefix=f"papri_dl_{video_source_id}_", dir=temp_download_basedir) as tmpdir_path:
-            # ... (output_template and ydl_opts as in Step 31, ensure robust output filename handling) ...
-            # Using platform_video_id in filename template for better predictability
             filename_base = video_source.platform_video_id if video_source.platform_video_id else str(video_source.id)
             output_template = os.path.join(tmpdir_path, f"{filename_base}.%(ext)s")
-            
-            ydl_opts = [ # Example, tune as needed
-                '-f', 'bestvideo[height<=480][ext=mp4][vcodec^=avc]/mp4', # Prefer h264 for wider compatibility with OpenCV
-                '--output', output_template,
-                '--no-playlist', '--max-filesize', '300M',
-                '--socket-timeout', '60', '--retries', '2', '--fragment-retries', '2',
-                '--restrict-filenames', '--no-warnings', '--ignore-config', '--no-cache-dir',
+            ydl_opts = [
+                '-f', 'bestvideo[height<=480][ext=mp4][vcodec^=avc]/mp4', '--output', output_template,
+                '--no-playlist', '--max-filesize', '300M', '--socket-timeout', '60', 
+                '--retries', '2', '--fragment-retries', '2', '--restrict-filenames', 
+                '--no-warnings', '--ignore-config', '--no-cache-dir',
                 '--extractor-args', 'youtube:player_client=web;youtube:skip=hls,dash',
             ]
-            # ... (subprocess.run for yt-dlp) ...
+            logger.info(f"Celery VisualIndex: Downloading {video_url} with yt-dlp...")
             process = subprocess.run(['yt-dlp'] + ydl_opts + [video_url], capture_output=True, text=True, check=False, encoding='utf-8', errors='ignore')
-            
+
             downloaded_file_path = None
             if process.returncode == 0:
-                # ... (logic to find downloaded_file_path, refined to use expected_filename_base) ...
-                expected_filename_base_for_find = filename_base # The platform_video_id or source.id
+                # ... (logic to find downloaded_file_path as in Step 31) ...
+                expected_filename_base_for_find = filename_base
                 for f_name in sorted(os.listdir(tmpdir_path)):
                     if f_name.startswith(expected_filename_base_for_find) and any(f_name.endswith(ext) for ext in ['.mp4', '.mkv', '.webm']):
-                        downloaded_file_path = os.path.join(tmpdir_path, f_name)
-                        break
-                if not downloaded_file_path: # Fallback
+                        downloaded_file_path = os.path.join(tmpdir_path, f_name); break
+                if not downloaded_file_path:
                      for f_name in sorted(os.listdir(tmpdir_path)):
                         if any(f_name.endswith(ext) for ext in ['.mp4', '.mkv', '.webm']):
                             downloaded_file_path = os.path.join(tmpdir_path, f_name); break
-                # ... (error if file not found) ...
-                if not downloaded_file_path:
+                if downloaded_file_path:
+                    logger.info(f"Celery VisualIndex: Downloaded to {downloaded_file_path}. Size: {os.path.getsize(downloaded_file_path) if os.path.exists(downloaded_file_path) else 'N/A'} bytes.")
+                else:
+                    err_msg = f"yt-dlp success but downloaded file not found. stdout: {process.stdout[-200:]}"
+                    logger.error(f"Celery VisualIndex: {err_msg}")
                     video_source.meta_visual_processing_status = 'download_failed_file_not_found'
-                    video_source.meta_visual_processing_error = f"yt-dlp success but file not found. stdout: {process.stdout[-200:]}"
-                    video_source.save(update_fields=['meta_visual_processing_status', 'meta_visual_processing_error'])
+                    video_source.meta_visual_processing_error = err_msg; video_source.save()
                     return {"status": "failed_download_file_missing"}
-            else: # yt-dlp failed
-                # ... (error handling, save status to video_source) ...
+            else:
                 error_output = f"yt-dlp failed (code {process.returncode}). Stderr: {process.stderr[-500:]}"
+                logger.error(f"Celery VisualIndex: {error_output}")
                 video_source.meta_visual_processing_status = 'download_failed'
-                video_source.meta_visual_processing_error = error_output
-                video_source.save(update_fields=['meta_visual_processing_status', 'meta_visual_processing_error'])
+                video_source.meta_visual_processing_error = error_output; video_source.save()
                 return {"status": "failed_download", "error": error_output}
 
-            video_source.meta_visual_processing_status = 'indexing' # Mark as indexing
+            video_source.meta_visual_processing_status = 'indexing'
             video_source.save(update_fields=['meta_visual_processing_status'])
+            logger.info(f"Celery VisualIndex: VSID {video_source_id} status -> 'indexing'.")
 
-            # Call VisualAnalyzer using the shared instance
             result = visual_analyzer_instance.index_video_frames(video_source, downloaded_file_path)
             
+            logger.info(f"Celery VisualIndex: VisualAnalyzer result for VSID {video_source_id}: {result}")
             if result.get("error") or result.get("indexed_frames_count", 0) == 0:
                 video_source.meta_visual_processing_status = 'analysis_failed'
-                video_source.meta_visual_processing_error = result.get("error", "No frames indexed")[:500]
+                video_source.meta_visual_processing_error = result.get("error", "No frames effectively indexed")[:500]
             else:
                 video_source.meta_visual_processing_status = 'completed'
                 video_source.meta_visual_processing_error = None
                 video_source.last_visual_indexed_at = timezone.now()
-            video_source.save() # Save final status
-
+            video_source.save() # Save final status and timestamp
+            logger.info(f"Celery VisualIndex: VSID {video_source_id} final visual processing status '{video_source.meta_visual_processing_status}'.")
             return {"status": video_source.meta_visual_processing_status, "result": result}
 
-    # ... (except VideoSource.DoesNotExist and general Exception blocks) ...
     except VideoSource.DoesNotExist:
-        print(f"Celery VisualIndex: VSID {video_source_id} not found.")
+        logger.error(f"Celery VisualIndex: VSID {video_source_id} not found.")
         return {"status": "error_vs_not_found"}
     except Exception as e:
-        # ... (Log full traceback, attempt to update VideoSource status to error_unexpected)
-        import traceback; error_full = f"UNEXPECTED error VSID {video_source_id}: {e}\n{traceback.format_exc()}"
-        print(error_full)
-        try:
-            vs_on_error = VideoSource.objects.get(id=video_source_id)
-            vs_on_error.meta_visual_processing_status = 'error_unexpected'
-            vs_on_error.meta_visual_processing_error = str(e)[:500]
-            vs_on_error.save(update_fields=['meta_visual_processing_status', 'meta_visual_processing_error'])
-        except: pass
-        # self.retry(exc=e, countdown=60*10, max_retries=1) # Retry once for truly unexpected issues
-        return {"status": "error_unexpected", "reason": str(e)}
-
+        import traceback
+        error_full = f"Celery VisualIndex: UNEXPECTED error for VSID {video_source_id}: {e}\n{traceback.format_exc()}"
+        logger.error(error_full)
+        if video_source: # video_source might be defined if error happened after fetch
+            try:
+                video_source.meta_visual_processing_status = 'error_unexpected'
+                video_source.meta_visual_processing_error = str(e)[:500]
+                video_source.save(update_fields=['meta_visual_processing_status', 'meta_visual_processing_error'])
+            except: pass 
+        raise # Re-raise to let Celery handle retry based on task decorator
 
 
 @shared_task(bind=True, name='api.process_search_query', acks_late=True, time_limit=600, max_retries=2, default_retry_delay=60)
