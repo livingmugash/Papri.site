@@ -82,134 +82,137 @@ from ..items import PapriVideoItem # Assuming items.py is in .. (one level up)
 
 class PeertubeSpider(scrapy.Spider):
     name = "peertube"
-    # This spider is now more tailored. It might not need 'query_text' directly
-    # if it's just Browse, or it could construct a search URL.
+    custom_settings = { # Spider-specific settings can override project settings
+        'DOWNLOAD_DELAY': 1.5, # Slightly more polite for this specific spider
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
+    }
 
-    def __init__(self, start_url=None, target_domain=None, search_query=None, *args, **kwargs):
+    def __init__(self, start_url=None, target_domain=None, search_query=None, max_items_to_scrape=10, *args, **kwargs):
         super(PeertubeSpider, self).__init__(*args, **kwargs)
+        
+        self.search_query = search_query
+        self.max_items = int(max_items_to_scrape)
+        self.item_count = 0
+
         if start_url:
             self.start_urls = [start_url]
             self.allowed_domains = [target_domain if target_domain else urlparse(start_url).netloc]
+            self.logger.info(f"PeertubeSpider initialized for Start URL: {start_url}, Domain: {self.allowed_domains}, Max Items: {self.max_items}, Query: {self.search_query}")
         else:
-            # Default for testing specific instance if not provided by agent
-            # self.start_urls = ['https://tilvids.com/videos/recently-added'] # Example for Tilvids
-            # self.allowed_domains = ['tilvids.com']
-            self.logger.warning("PeertubeSpider: No start_url provided during initialization!")
-            self.start_urls = []
-        
-        self.search_query = search_query # Store query if spider logic uses it (e.g. for constructing search URLs)
-        self.item_count = 0
-        self.max_items = kwargs.get('max_items_to_scrape', 20) # Max items to scrape per run
+            self.logger.error("PeertubeSpider: Critical - No start_url provided!")
+            self.start_urls = [] # Prevent crawling if not properly initialized
 
     def parse(self, response):
         """
-        Parses video listing pages (e.g., /videos/local, /videos/trending, or search results page).
-        Extracts links to individual video pages.
+        Parses video listing pages (e.g., search results, /videos/local, etc.).
         """
-        self.logger.info(f"Parsing listing page: {response.url}")
+        if not self.start_urls: # Spider wasn't initialized with a URL
+            return
 
-        # --- SELECTORS FOR TILVIDS.COM (EXAMPLE - VERIFY AND ADJUST) ---
-        # Video items often in a list or grid
-        # For tilvids.com, a common structure might be <div class="videos-grid"> ... <div class="video-block">
-        video_blocks = response.css('div.video-miniature-container') # More generic PeerTube selector
-        if not video_blocks:
-            video_blocks = response.css('div.video-block') # Another common one
-            if not video_blocks:
-                 self.logger.warning(f"No video blocks found on {response.url} with common selectors.")
+        self.logger.info(f"Parsing listing page: {response.url}. Items scraped so far: {self.item_count}/{self.max_items}")
 
-        for video_block in video_blocks:
+        # === YOU MUST REPLACE THESE SELECTORS WITH ACTUAL ONES FOR YOUR TARGET PEERTUBE INSTANCE ===
+        # Example: Common structure for video miniatures in PeerTube themes
+        video_miniatures = response.css('div.video-miniature, div.video-tile, article.video-card, div.videos-grid-item') 
+
+        if not video_miniatures:
+            self.logger.warning(f"No video miniatures found on {response.url} with current selectors. Check selectors.")
+            # Try a very generic link finder if specific ones fail (less reliable)
+            # video_miniatures = response.css('a[href*="/w/"], a[href*="/videos/watch/"]')
+
+
+        for miniature in video_miniatures:
             if self.item_count >= self.max_items:
-                self.logger.info(f"Reached max items to scrape ({self.max_items}). Stopping.")
-                return # Stop crawling this page further
+                self.logger.info(f"Max items ({self.max_items}) reached. Stopping crawl of listing page.")
+                return
 
-            # Get the link to the individual video page
-            relative_video_url = video_block.css('a.video-link::attr(href)').get() # Common class
-            if not relative_video_url:
-                 relative_video_url = video_block.css('a::attr(href)').get() # More generic link if above fails
-
+            # Extract relative URL to the video page
+            relative_video_url = miniature.css('a.video-link::attr(href), a.thumbnail::attr(href), a::attr(href)').get() # Try common patterns
+            
             if relative_video_url:
+                # Filter out non-video links if a generic selector was used
+                if not ('/w/' in relative_video_url or '/videos/watch/' in relative_video_url or '/videos/embed/' in relative_video_url):
+                    # self.logger.debug(f"Skipping non-video link: {relative_video_url}")
+                    continue
+
                 full_video_url = response.urljoin(relative_video_url)
+                # Check if we already visited or scheduled this to avoid loops on same page links
                 yield scrapy.Request(full_video_url, callback=self.parse_video_page)
-            else:
-                self.logger.warning(f"Could not find video link in block on {response.url}")
-        
-        # --- PAGINATION (EXAMPLE - VERIFY AND ADJUST) ---
-        # next_page_link = response.css('ul.pagination li.pagination-next a::attr(href)').get()
-        # if next_page_link and self.item_count < self.max_items:
-        #     self.logger.info(f"Following next page: {next_page_link}")
-        #     yield response.follow(next_page_link, callback=self.parse)
+            # else:
+                # self.logger.debug(f"No video link found in a miniature block on {response.url}")
+
+        # === PAGINATION LOGIC (EXAMPLE - HIGHLY SITE-SPECIFIC) ===
+        # next_page_candidates = response.css('ul.pagination li.active + li a::attr(href), a.pagination-next::attr(href), a[rel="next"]::attr(href)')
+        # next_page = next_page_candidates.get()
+        # if next_page and self.item_count < self.max_items:
+        #     self.logger.info(f"Following next page: {next_page}")
+        #     yield response.follow(next_page, callback=self.parse)
 
 
     def parse_video_page(self, response):
-        """
-        Parses an individual video page to extract metadata.
-        """
         if self.item_count >= self.max_items:
-            self.logger.info(f"Reached max items ({self.max_items}) before parsing video page. Skipping {response.url}")
+            self.logger.info(f"Max items ({self.max_items}) reached before parsing video page. Skipping {response.url}")
             return
 
         self.logger.info(f"Parsing video page: {response.url}")
         loader = ItemLoader(item=PapriVideoItem(), response=response)
 
         loader.add_value('original_url', response.url)
-        loader.add_value('platform_name', 'PeerTube_' + self.allowed_domains[0]) # e.g., PeerTube_tilvids.com
+        loader.add_value('platform_name', f'PeerTube_{self.allowed_domains[0]}') # Use the specific instance domain
 
-        # Extract video ID from URL (e.g., /w/shortVideoId or /videos/watch/uuid-video-id)
+        # Video ID extraction from URL
         url_path = urlparse(response.url).path
-        if '/w/' in url_path:
-            video_id = url_path.split('/w/')[-1].split('?')[0]
-        elif '/videos/watch/' in url_path:
-            video_id = url_path.split('/videos/watch/')[-1].split('?')[0]
-        else:
-            video_id = None # Fallback needed
-            self.logger.warning(f"Could not determine platform_video_id from URL: {response.url}")
+        video_id = None
+        if '/w/' in url_path: video_id = url_path.split('/w/')[-1].split('?')[0].split('/')[0]
+        elif '/videos/watch/' in url_path: video_id = url_path.split('/videos/watch/')[-1].split('?')[0].split('/')[0]
+        elif '/videos/embed/' in url_path: video_id = url_path.split('/videos/embed/')[-1].split('?')[0].split('/')[0]
+        
+        if not video_id: # Attempt to get from meta tags if URL is unusual
+            video_id = response.xpath('//meta[@property="og:url"]/@content').re_first(r'/w/([a-zA-Z0-9_-]+)|/videos/watch/([a-zA-Z0-9_-]+)|/videos/embed/([a-zA-Z0-9_-]+)')
+            if isinstance(video_id, list): video_id = next(filter(None, video_id), None)
+
+        if not video_id: self.logger.warning(f"Could not determine platform_video_id for {response.url}")
         loader.add_value('platform_video_id', video_id)
         
-        # --- SELECTORS FOR TILVIDS.COM (EXAMPLE - VERIFY AND ADJUST) ---
-        loader.add_css('title', 'h1.video-title::text, meta[property="og:title"]::attr(content)')
-        loader.add_css('description', 'div.video-description div.markdown p::text, meta[property="og:description"]::attr(content)')
+        # === YOU MUST REPLACE THESE SELECTORS WITH ACTUAL ONES ===
+        loader.add_css('title', 'h1.video-title::text, meta[property="og:title"]::attr(content), title::text')
+        loader.add_css('description', 'div.video-description .markdown p::text, div.video-description::text, meta[property="og:description"]::attr(content)')
         loader.add_xpath('thumbnail_url', '//meta[@property="og:image"]/@content')
         
-        # Publication date often in a <meta> or <time> tag, or sometimes in ld+json script
-        loader.add_xpath('publication_date_str', '//meta[@itemprop="uploadDate"]/@content')
-        # if not loader.get_output_value('publication_date_str'):
-        #     loader.add_css('publication_date_str', 'span.date-label time::attr(datetime)') # Another common pattern
+        loader.add_xpath('publication_date_str', '//meta[@itemprop="uploadDate"]/@content, //meta[@property="video:release_date"]/@content')
+        if not loader.get_collected_values('publication_date_str'): # Alternate common way
+            loader.add_css('publication_date_str', 'span.date-label time::attr(datetime), p. वीडियो-publication-date::text')
 
-        # Duration often in <meta itemprop="duration">
         loader.add_xpath('duration_str', '//meta[@itemprop="duration"]/@content') # e.g., PT10M3S
         
-        loader.add_css('uploader_name', 'a.video-channel-name span.username::text, div.video-account span.actor-name span::text')
-        loader.add_css('uploader_url', 'a.video-channel-name::attr(href), div.video-account a.display-name::attr(href)')
+        loader.add_css('uploader_name', 'a.video-channel-name .instance-actor-name::text, a.video-channel-info .display-name::text, .channel-name a::text')
+        loader.add_css('uploader_url', 'a.video-channel-name::attr(href), a.video-channel-info .display-name::attr(href)')
         
-        loader.add_css('tags', 'div.video-tags a.tag-饅頭::text') # Check for tag specific classes
+        loader.add_css('tags', 'div.video-tags a.tag::text, .tags a::text') # Common tag structures
 
-        # View count can be tricky, often JS rendered. Look for static counts if available.
-        # loader.add_css('view_count_str', '.views-count::text, .view-count::text') 
+        # VTT URL (crucial)
+        # Try to find English first, then any other caption track
+        vtt_en_url = response.xpath('//video//track[@kind="captions" and (@srclang="en" or starts-with(@srclang, "en-"))][1]/@src').get()
+        if vtt_en_url:
+            loader.add_value('transcript_vtt_url', response.urljoin(vtt_en_url))
+            loader.add_value('language_code', 'en') # Assume English
+        else:
+            any_vtt_url = response.xpath('//video//track[@kind="captions"][1]/@src').get()
+            if any_vtt_url:
+                loader.add_value('transcript_vtt_url', response.urljoin(any_vtt_url))
+                # Try to get language code from srclang attribute
+                lang = response.xpath('//video//track[@kind="captions"][1]/@srclang').get()
+                loader.add_value('language_code', lang if lang else 'und') # 'und' for undetermined
+
+        # Embed URL / Direct Video URLs
+        loader.add_xpath('embed_url', '//meta[@itemprop="embedURL"]/@content, //link[@itemprop="embedUrl"]/@href')
+        loader.add_xpath('direct_video_url', '//video/source[@type="video/mp4"][1]/@src, //video/source[1]/@src') # Prioritize MP4
+
+        item = loader.load_item()
         
-        # Transcripts/Captions (VTT files)
-        # Look for <track kind="captions" src="URL_TO_VTT_FILE.vtt" srclang="en">
-        # Or in <script type="application/ld+json"> for videoObject.transcript
-        # This selector gets the src from the first English caption track
-        loader.add_xpath('transcript_vtt_url', '//video//track[@kind="captions" and (@srclang="en" or @srclang="en-US")][1]/@src')
-        # Fallback if no English:
-        if not loader.get_output_value('transcript_vtt_url'):
-             loader.add_xpath('transcript_vtt_url', '//video//track[@kind="captions"][1]/@src')
-
-
-        # Embed URL or direct video file
-        loader.add_xpath('embed_url', '//meta[@itemprop="embedURL"]/@content')
-        if not loader.get_output_value('embed_url'):
-             loader.add_css('embed_url', 'link[itemprop="embedUrl"]::attr(href)')
-        
-        # Try to get a direct MP4 link if possible from <video> <source>
-        loader.add_xpath('direct_video_url', '//video/source[@type="video/mp4"][1]/@src')
-
-
-        self.item_count += 1
-        yield loader.load_item()
-
-# To run from command line for testing this spider:
-# Assuming this file is in backend/ai_agents/scrapers/spiders/peertube_spider.py
-# And items.py is in backend/ai_agents/scrapers/items.py
-# And you are in the 'backend' directory:
-# PYTHONPATH=. scrapy crawl peertube -a start_url="https://tilvids.com/videos/recently-
+        # Basic check if essential data was scraped
+        if item.get('title') and item.get('original_url'):
+            self.item_count += 1
+            yield item
+        else:
+            self.logger.warning(f"Essential data (title/url) missing for {response.url}. Item not yielded.")
