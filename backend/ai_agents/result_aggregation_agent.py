@@ -21,52 +21,86 @@ class ResultAggregationAgent:
             print(f"RARAgent: CRITICAL - Qdrant connection failed: {e}")
         print("ResultAggregationAgent initialized.")
 
-    def _search_qdrant_transcript_db(self, query_embedding, top_k=50, video_papri_ids_filter_list=None):
-        # ... (Implementation from Step 25 - remains the same) ...
+    def _apply_qdrant_payload_filter(self, existing_qdrant_filter, filters_from_api):
+        """
+        Helper to build or extend Qdrant filter based on API filter parameters.
+        """
+        qdrant_filter_conditions = []
+        if existing_qdrant_filter and hasattr(existing_qdrant_filter, 'must') and existing_qdrant_filter.must:
+            qdrant_filter_conditions.extend(existing_qdrant_filter.must)
+
+        # Example: Platform filter (if platform_name is in Qdrant payload for visual/transcript points)
+        # This is less likely for transcripts, more for visual if frame associated with platform.
+        # For now, platform is better handled post-DB query in SearchResultsView or on VideoSource.
+
+        # Example: Date filter (if publication_date_timestamp_ms is in Qdrant payload)
+        date_after_str = filters_from_api.get('date_after') # YYYY-MM-DD
+        if date_after_str:
+            dt_after = parse_datetime(date_after_str + "T00:00:00Z") # Convert to datetime
+            if dt_after:
+                qdrant_filter_conditions.append(qdrant_models.FieldCondition(
+                    key="publication_timestamp_ms", # Assuming you store this in payload
+                    range=qdrant_models.Range(gte=int(dt_after.timestamp() * 1000))
+                ))
+        # (Similar for date_before)
+
+        if qdrant_filter_conditions:
+            return qdrant_models.Filter(must=qdrant_filter_conditions)
+        return None
+
+
+    def _search_qdrant_transcript_db(self, query_embedding, top_k=50, video_papri_ids_filter_list=None, api_filters=None):
         if not self.qdrant_client or not query_embedding: return []
-        # ... (rest of the logic)
         try:
-            filter_ = None
-            if video_papri_ids_filter_list: filter_ = qdrant_models.Filter(must=[qdrant_models.FieldCondition(key="video_papri_id", match=qdrant_models.MatchAny(any=video_papri_ids_filter_list))])
-            results = self.qdrant_client.search(collection_name=self.qdrant_transcript_collection_name, query_vector=query_embedding, query_filter=filter_, limit=top_k, with_payload=True)
-            return [{'transcript_id': h.id, 'video_papri_id': h.payload.get('video_papri_id') if h.payload else None, 'semantic_score': h.score} for h in results if h.payload]
-        except Exception as e: print(f"RARAgent: Error Qdrant Transcript Search: {e}"); return []
-
-
-    def _search_qdrant_visual_db(self, query_cnn_embedding, top_k=30, video_papri_ids_filter_list=None):
-        if not self.qdrant_client or not query_cnn_embedding:
-            print("RARAgent: Qdrant client (visual) or query CNN embedding not available for visual search.")
-            return []
-        try:
-            filter_ = None
+            # Initial filter (e.g., by video_papri_ids if provided)
+            current_qdrant_filter = None
             if video_papri_ids_filter_list:
-                filter_ = qdrant_models.Filter(
-                    must=[qdrant_models.FieldCondition(key="video_papri_id", match=qdrant_models.MatchAny(any=video_papri_ids_filter_list))]
-                )
+                current_qdrant_filter = qdrant_models.Filter(must=[
+                    qdrant_models.FieldCondition(key="video_papri_id", match=qdrant_models.MatchAny(any=video_papri_ids_filter_list))
+                ])
             
+            # Augment with filters from API if applicable to Qdrant payload
+            if api_filters:
+                current_qdrant_filter = self._apply_qdrant_payload_filter(current_qdrant_filter, api_filters)
+
+            results = self.qdrant_client.search(
+                collection_name=self.qdrant_transcript_collection_name, 
+                query_vector=query_embedding, 
+                query_filter=current_qdrant_filter, # Apply combined filter
+                limit=top_k, 
+                with_payload=True
+            )
+            # ... (process results as before) ...
+            return [{'transcript_id': h.id, 'video_papri_id': h.payload.get('video_papri_id'), 'semantic_score': h.score} for h in results if h.payload]
+        except Exception as e: logger.error(f"RARAgent: Error Qdrant Transcript Search with filters: {e}", exc_info=True); return []
+
+
+    def _search_qdrant_visual_db(self, query_cnn_embedding, top_k=30, video_papri_ids_filter_list=None, api_filters=None):
+        if not self.qdrant_client or not query_cnn_embedding: return []
+        try:
+            current_qdrant_filter = None
+            if video_papri_ids_filter_list:
+                current_qdrant_filter = qdrant_models.Filter(must=[
+                    qdrant_models.FieldCondition(key="video_papri_id", match=qdrant_models.MatchAny(any=video_papri_ids_filter_list))
+                ])
+            if api_filters:
+                current_qdrant_filter = self._apply_qdrant_payload_filter(current_qdrant_filter, api_filters)
+
             search_results = self.qdrant_client.search(
                 collection_name=self.qdrant_visual_collection_name,
                 query_vector=query_cnn_embedding,
-                query_filter=filter_,
+                query_filter=current_qdrant_filter, # Apply combined filter
                 limit=top_k,
                 with_payload=True,
-                score_threshold=0.5 # Optional: Minimum similarity score for CNN matches (0.0 to 1.0 for Cosine) - tune this!
+                score_threshold=0.5 
             )
-            visual_hits = []
-            for hit in search_results:
-                if hit.payload:
-                    visual_hits.append({
-                        'video_frame_feature_id': hit.id, 
-                        'video_papri_id': hit.payload.get('video_papri_id'),
-                        'timestamp_ms': hit.payload.get('timestamp_ms'),
-                        'visual_cnn_score': hit.score, 
-                        'phash_from_payload': hit.payload.get('phash') 
-                    })
-            print(f"RARAgent: Qdrant visual CNN search found {len(visual_hits)} hits (top_k={top_k}).")
-            return visual_hits
-        except Exception as e:
-            print(f"RARAgent: Error searching Qdrant visual DB: {e}")
-            return []
+            # ... (process results as before) ...
+            return [{'video_frame_feature_id': h.id, 'video_papri_id': h.payload.get('video_papri_id'), 'timestamp_ms': h.payload.get('timestamp_ms'), 'visual_cnn_score': h.score, 'phash_from_payload': h.payload.get('phash')} for h in search_results if h.payload]
+        except Exception as e: logger.error(f"RARAgent: Error Qdrant Visual Search with filters: {e}", exc_info=True); return []
+
+    # _search_perceptual_hashes_in_db remains mostly a Django query. 
+    # API filters like date/duration would be applied by SearchResultsView on the Video objects.
+    # Platform filter for pHash could be done by filtering candidate_frames_qs by video_source__platform_name.
 
     def _search_perceptual_hashes_in_db(self, query_hashes, hash_threshold=8, video_papri_ids_filter_list=None): # Increased threshold slightly
         if not query_hashes or not query_hashes.get('phash'):
@@ -313,3 +347,106 @@ class ResultAggregationAgent:
              logger.debug(f"  Ranked: VID={item['video_id']}, Score={item['combined_score']:.3f}, Snippet: {item.get('text_snippet', 'N/A')[:50]}...")
         
         return final_ranked_list_output # List of dicts including text_snippet
+        # --- Text Semantic Search (Pass API filters) ---
+        if query_text_embedding:
+            text_semantic_hits = self._search_qdrant_transcript_db(
+                query_text_embedding, top_k=50, 
+                video_papri_ids_filter_list=current_session_video_ids, # Optionally filter by current session
+                api_filters=filters # Pass API filters
+            )
+            # ... (populate final_scores_by_video_id as before) ...
+            for hit in text_semantic_hits:
+                video_id = hit.get('video_papri_id');
+                if video_id is not None:
+                    final_scores_by_video_id[video_id]['semantic_text_score'] = max(final_scores_by_video_id[video_id]['semantic_text_score'], hit['semantic_score'])
+                    final_scores_by_video_id[video_id]['match_type_flags'].add('text_sem')
+
+
+        # --- Visual CNN Semantic Search (Pass API filters) ---
+        if query_visual_features and query_visual_features.get('cnn_embedding'):
+            query_cnn_embedding = query_visual_features['cnn_embedding']
+            visual_cnn_hits = self._search_qdrant_visual_db(
+                query_cnn_embedding, top_k=30,
+                # video_papri_ids_filter_list=current_session_video_ids, # Could also filter here
+                api_filters=filters # Pass API filters
+            )
+            # ... (populate final_scores_by_video_id as before) ...
+            for hit in visual_cnn_hits:
+                video_id = hit.get('video_papri_id');
+                if video_id is not None:
+                    current_max_score = final_scores_by_video_id[video_id]['visual_cnn_score']
+                    if hit['visual_cnn_score'] > current_max_score:
+                        final_scores_by_video_id[video_id]['visual_cnn_score'] = hit['visual_cnn_score']
+                        final_scores_by_video_id[video_id]['best_match_timestamp_ms'] = hit.get('timestamp_ms')
+                    final_scores_by_video_id[video_id]['match_type_flags'].add('vis_cnn')
+
+
+        # ... (Visual Perceptual Hash Search - can also use filters for candidate_frames_qs) ...
+        # ... (Keyword Scoring - this happens on Video objects, filters from API are applied by SearchResultsView on Video queryset) ...
+        # ... (Combine all scores and Rank - as before) ...
+        # ... (Return list of dicts with scores and match_types) ...
+
+        # The rest of the method for keyword scoring, combining scores, and final ranking
+        # remains largely the same as in Step 32 / previous. The main change is passing
+        # 'filters' to the Qdrant search methods.
+        # The actual DB-level filtering for Video model properties (duration, date) is still
+        # best handled in SearchResultsView after RARAgent provides the initial ranked list of IDs.
+        # Platform filter in SearchResultsView also remains effective there.
+
+        # This structure allows RARAgent's Qdrant searches to be potentially pre-filtered
+        # if filters applicable to Qdrant payload are passed.
+        # For now, _apply_qdrant_payload_filter is a stub. You'd implement conditions for
+        # date ranges, etc., IF you store corresponding data (like publication_timestamp_ms)
+        # in your Qdrant point payloads for transcripts and visual frames.
+
+        # For V1, the filters applied in SearchResultsView on the Video objects is the primary filtering mechanism.
+        # This change makes RARAgent "aware" of filters for future optimization.
+
+        # (The rest of the ranking and result formatting logic from Step 32)
+        # ... (all_potential_video_ids, videos_to_process_qset, keyword scoring loop, score combination, sorting, fallback) ...
+        all_ids_to_score_details_for = set(current_session_video_ids); all_ids_to_score_details_for.update(final_scores_by_video_id.keys())
+        if not all_ids_to_score_details_for: return []
+        videos_to_process_qset = Video.objects.filter(id__in=list(all_ids_to_score_details_for)).prefetch_related('sources__transcripts__keywords')
+        for papri_video in videos_to_process_qset: # ... (populate pub_date, keyword score, text snippet) ...
+            video_id = papri_video.id; final_scores_by_video_id[video_id]['publication_date'] = papri_video.publication_date if papri_video.publication_date else timezone.datetime.min.replace(tzinfo=timezone.utc)
+            # ... (keyword scoring for final_scores_by_video_id[video_id]['keyword_score'] & match_type_flags) ...
+            # ... (text snippet generation for final_scores_by_video_id[video_id]['text_snippet']) ...
+            if query_keywords:
+                kw_score = 0; vid_kws = set()
+                for vs_obj in papri_video.sources.all(): # ... get keywords ...
+                    analysis = all_analysis_data.get(vs_obj.id, {}).get('transcript_analysis', {})
+                    if analysis.get('status') == 'processed': vid_kws.update(k.lower() for k in analysis.get('keywords',[]))
+                if papri_video.title: vid_kws.update(w.lower() for w in papri_video.title.split())
+                if papri_video.description: vid_kws.update(w.lower() for w in papri_video.description.split()[:70])
+                matching_kws = query_keywords.intersection(vid_kws); kw_score = len(matching_kws)
+                if processed_query_data.get('processed_query', '').lower() in (papri_video.title.lower() if papri_video.title else ''): kw_score += 5
+                final_scores_by_video_id[video_id]['keyword_score'] = kw_score
+                if kw_score > 0: final_scores_by_video_id[video_id]['match_type_flags'].add('text_kw')
+            
+            text_for_snippet = (next((t.transcript_text_content for vs in papri_video.sources.all() for t in vs.transcripts.filter(processing_status='processed').order_by('-updated_at') if t.transcript_text_content), None) or papri_video.description or "")
+            if ('text_kw' in final_scores_by_video_id[video_id]['match_type_flags'] or final_scores_by_video_id[video_id]['semantic_text_score'] > 0.05) and text_for_snippet:
+                final_scores_by_video_id[video_id]['text_snippet'] = self._generate_text_snippet(text_for_snippet, query_keywords)
+
+
+        final_ranked_list_output = []; 
+        for video_id, scores in final_scores_by_video_id.items(): # ... (combine scores, append to final_ranked_list_output) ...
+            # ... (weights and combined_score calc from Step 32)
+             W_KW = 0.25; W_SEM_TEXT = 0.30; W_VIS_CNN = 0.25; W_VIS_PHASH = 0.20 
+             norm_kw_score = min(scores['keyword_score'] / 20.0, 1.0)
+             combined_score = (norm_kw_score * W_KW + scores['semantic_text_score'] * W_SEM_TEXT +
+                               scores['visual_cnn_score'] * W_VIS_CNN + scores['visual_phash_score'] * W_VIS_PHASH)
+             # ... (intent boosting) ...
+             final_ranked_list_output.append({
+                'video_id': video_id, 'combined_score': combined_score, # ... other scores ...
+                'kw_score': scores['keyword_score'], 'sem_text_score': scores['semantic_text_score'],
+                'vis_cnn_score': scores['visual_cnn_score'], 'vis_phash_score': scores['visual_phash_score'],
+                'publication_date': scores['publication_date'], 'match_types': list(scores['match_type_flags']),
+                'best_match_timestamp_ms': scores.get('best_match_timestamp_ms'),
+                'text_snippet': scores.get('text_snippet')
+            })
+        final_ranked_list_output.sort(key=lambda x: (x['combined_score'], x['publication_date']), reverse=True)
+        # ... (Fallback logic for empty results if needed) ...
+        logger.info(f"RARAgent: Rank/Filter. In: {len(persisted_video_source_objects)} sources. Out: {len(final_ranked_list_output)} items.")
+        return final_ranked_list_output
+
+
