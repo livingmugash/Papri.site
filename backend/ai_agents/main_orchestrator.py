@@ -389,3 +389,197 @@ class PapriAIAgentOrchestrator:
             "updated_video_sources": updated_videos, # This counts source updates more than video object updates
             "saved_video_ids": saved_video_ids
         }
+
+    def _normalize_text_for_hash(self, text):
+        if not text:
+            return ""
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text) # Remove punctuation
+        text = re.sub(r'\s+', ' ', text).strip() # Normalize whitespace
+        # Optional: stemming or lemmatization here for more robustness
+        return text
+
+    def _generate_metadata_deduplication_hash(self, title, duration_seconds, uploader_name=None):
+        """
+        Generates a deduplication hash based on normalized title and duration.
+        Duration is bucketed to allow for slight variations.
+        """
+        if not title or duration_seconds is None:
+            return None # Cannot generate hash without essential components
+
+        norm_title = self._normalize_text_for_hash(title)
+        
+        # Bucket duration to allow for minor discrepancies (e.g., +/- 5 seconds)
+        # This is a simple bucketing strategy.
+        duration_bucket = (duration_seconds // 10) * 10 if duration_seconds is not None else -1 
+
+        # Include normalized uploader name if available and considered stable
+        norm_uploader = self._normalize_text_for_hash(uploader_name) if uploader_name else ""
+
+        # Combine the normalized components
+        # Order matters for consistency.
+        hash_string = f"title:{norm_title}|duration_bucket:{duration_bucket}|uploader:{norm_uploader}"
+        
+        return hashlib.sha256(hash_string.encode('utf-8')).hexdigest()
+
+
+    @transaction.atomic
+    def _persist_basic_video_info(self, video_data_list):
+        created_or_updated_sources = []
+        processed_video_ids_in_batch = set() # To avoid processing the same canonical video multiple times within this batch
+
+        for item_data in video_data_list:
+            original_url = item_data.get('original_url')
+            if not original_url: continue
+            platform_name = item_data.get('platform_name')
+            platform_video_id = item_data.get('platform_video_id')
+            if not platform_name or not platform_video_id: continue
+
+            # --- Step 1: Generate Deduplication Hash for the incoming item ---
+            video_title = item_data.get('title')
+            video_duration = item_data.get('duration_seconds') # Expecting integer seconds
+            video_uploader = item_data.get('uploader_name') # Scrapers/APIs need to provide this
+
+            # Ensure duration is an int if it's a string
+            if isinstance(video_duration, str) and video_duration.isdigit():
+                video_duration = int(video_duration)
+            elif not isinstance(video_duration, int):
+                video_duration = self._parse_duration_str(str(item_data.get('duration_str'))) # Use existing helper if duration_seconds not direct
+
+            current_item_dedup_hash = self._generate_metadata_deduplication_hash(
+                video_title, video_duration, video_uploader
+            )
+            
+            # print(f"Orchestrator Persist: Item '{video_title}' URL '{original_url}' DedupHash: {current_item_dedup_hash}")
+
+
+            # --- Step 2: Find or Create the Canonical Video object using the dedup_hash ---
+            papri_video = None
+            video_created_in_db = False
+            if current_item_dedup_hash:
+                try:
+                    papri_video = Video.objects.get(deduplication_hash=current_item_dedup_hash)
+                    # print(f"Orchestrator Persist: Found existing Papri Video ID {papri_video.id} by hash {current_item_dedup_hash}")
+                except Video.DoesNotExist:
+                    # If not found by hash, create it
+                    try:
+                        video_defaults = {
+                            'description': item_data.get('description'),
+                            'duration_seconds': video_duration, # Use parsed/validated duration
+                            'primary_thumbnail_url': item_data.get('thumbnail_url'),
+                            'deduplication_hash': current_item_dedup_hash # Set the hash
+                        }
+                        pub_date_str_defaults = item_data.get('publication_date') # This might be a string from API/scraper
+                        if pub_date_str_defaults:
+                            parsed_date = self._parse_publication_date_to_datetime(pub_date_str_defaults)
+                            if parsed_date: video_defaults['publication_date'] = parsed_date
+                        
+                        papri_video = Video.objects.create(title=video_title or "Untitled Video", **video_defaults)
+                        video_created_in_db = True
+                        print(f"Orchestrator Persist: Created NEW Papri Video ID {papri_video.id} (Hash: {current_item_dedup_hash}) for title '{papri_video.title}'")
+                    except Exception as e_create: # Catch potential IntegrityError if somehow hash was created by parallel process
+                        print(f"Orchestrator Persist: Error creating Video with hash {current_item_dedup_hash}: {e_create}. Trying get again.")
+                        try: papri_video = Video.objects.get(deduplication_hash=current_item_dedup_hash) # Try get again
+                        except Video.DoesNotExist:
+                            print(f"Orchestrator Persist: Still could not get/create video for hash {current_item_dedup_hash}. Skipping item.")
+                            continue # Skip this item if canonical video cannot be established
+            else: # No valid title/duration to generate a hash, less ideal scenario
+                print(f"Orchestrator Persist: Could not generate dedup_hash for item '{video_title}'. Will try to link source by URL only.")
+                # In this case, VideoSource linking might be problematic if it needs a Video FK immediately.
+                # For now, we might skip items that can't form a dedup_hash.
+                # Or, as a last resort, create a Video object without a dedup_hash (not recommended as it defeats de-dupe).
+                # Let's skip for now if hash cannot be made
+                continue
+
+
+            if not papri_video: # If video still not found or created (e.g. error during create)
+                print(f"Orchestrator Persist: Failed to establish canonical Video for item '{video_title}'. Skipping source linking.")
+                continue
+
+
+            # --- Step 3: Create or Update the VideoSource object and link to canonical Video ---
+            video_source, source_created = VideoSource.objects.update_or_create(
+                original_url=original_url, # original_url should be unique for VideoSource
+                defaults={
+                    'video': papri_video, # Link to the canonical Video
+                    'platform_name': platform_name,
+                    'platform_video_id': platform_video_id,
+                    'embed_url': item_data.get('embed_url'),
+                    'source_metadata_json': item_data, # Store all raw data from this source
+                    'last_scraped_at': timezone.now()
+                }
+            )
+            if source_created:
+                print(f"Orchestrator Persist: Created VideoSource ID {video_source.id} for URL {original_url}, linked to Papri Video ID {papri_video.id}")
+            else:
+                # If source existed, ensure its video FK is correct if our dedup logic found a better canonical video
+                if video_source.video_id != papri_video.id:
+                    print(f"Orchestrator Persist: Re-linking existing VideoSource ID {video_source.id} from old Video ID {video_source.video_id} to new/correct canonical Video ID {papri_video.id}")
+                    video_source.video = papri_video
+                    video_source.save(update_fields=['video', 'last_scraped_at']) # And other fields if they changed
+                # print(f"Orchestrator Persist: Updated VideoSource ID {video_source.id} for URL {original_url}")
+
+
+            # --- Step 4: Update Canonical Video details if this source provides better/newer info ---
+            # (Only if this canonical video hasn't been fully processed in this batch yet)
+            if papri_video.id not in processed_video_ids_in_batch:
+                changed_video_fields = []
+                # Prefer longer description, more recent publication date, etc.
+                if item_data.get('description') and (not papri_video.description or len(item_data.get('description')) > len(papri_video.description)):
+                    papri_video.description = item_data.get('description'); changed_video_fields.append('description')
+                
+                if video_duration is not None and (papri_video.duration_seconds is None or abs(video_duration - papri_video.duration_seconds) > 5) : # Update if significantly different or not set
+                    papri_video.duration_seconds = video_duration; changed_video_fields.append('duration_seconds')
+
+                if item_data.get('thumbnail_url') and (not papri_video.primary_thumbnail_url or item_data.get('thumbnail_url') != papri_video.primary_thumbnail_url): # Update if new or different
+                    papri_video.primary_thumbnail_url = item_data.get('thumbnail_url'); changed_video_fields.append('primary_thumbnail_url')
+                
+                new_pub_date_str = item_data.get('publication_date')
+                if new_pub_date_str:
+                    new_pub_datetime = self._parse_publication_date_to_datetime(new_pub_date_str)
+                    if new_pub_datetime and (not papri_video.publication_date or new_pub_datetime > papri_video.publication_date): # Prefer newer date
+                        papri_video.publication_date = new_pub_datetime; changed_video_fields.append('publication_date')
+                
+                if not papri_video.title and video_title: # Ensure title is set if it was None
+                     papri_video.title = video_title; changed_video_fields.append('title')
+
+                if changed_video_fields:
+                    # print(f"Orchestrator Persist: Updating canonical Video ID {papri_video.id} with fields: {changed_video_fields}")
+                    papri_video.save(update_fields=changed_video_fields)
+                
+                processed_video_ids_in_batch.add(papri_video.id)
+            
+            created_or_updated_sources.append(video_source)
+        
+        return created_or_updated_sources
+
+    def _parse_publication_date_to_datetime(self, date_str): # Helper
+        if not date_str: return None
+        from dateutil import parser # Ensure 'pip install python-dateutil'
+        try:
+            dt_obj = parser.parse(date_str)
+            if dt_obj.tzinfo is None or dt_obj.tzinfo.utcoffset(dt_obj) is None: # If naive
+                return timezone.make_aware(dt_obj, timezone.get_default_timezone())
+            return dt_obj.astimezone(timezone.utc) # Convert to UTC
+        except (ValueError, TypeError, OverflowError):
+            # print(f"Orchestrator: Could not parse date string robustly: {date_str}")
+            return None # Fallback if robust parsing fails
+
+    # Add _parse_duration_str to orchestrator if not already there or import from SOIAgent
+    def _parse_duration_str(self, duration_str): # Helper from SOIAgent
+        if not duration_str: return None
+        import re
+        # ... (same robust duration parsing logic from SOIAgent)
+        duration_str_upper = str(duration_str).upper()
+        if duration_str_upper.startswith("PT"): 
+            h,m,s = 0,0,0
+            h_match = re.search(r'(\d+)H', duration_str_upper); h = int(h_match.group(1)) if h_match else 0
+            m_match = re.search(r'(\d+)M', duration_str_upper); m = int(m_match.group(1)) if m_match else 0
+            s_match = re.search(r'(\d+)S', duration_str_upper); s = int(s_match.group(1)) if s_match else 0
+            return h * 3600 + m * 60 + s
+        else: 
+            parts = [int(p) for p in str(duration_str).split(':') if p.isdigit()]
+            if len(parts) == 3: return parts[0]*3600 + parts[1]*60 + parts[2]
+            if len(parts) == 2: return parts[0]*60 + parts[1]
+            if len(parts) == 1 and str(duration_str).isdigit(): return parts[0]
+        return None
