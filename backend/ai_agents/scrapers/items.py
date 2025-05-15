@@ -18,6 +18,7 @@ class PapriVideoItem(scrapy.Item):
     like_count_str = scrapy.Field()       # Will need parsing
     transcript_text = scrapy.Field()      # If directly scraped
     transcript_vtt_url = scrapy.Field()   # URL to a VTT file
+    language_code = scrapy.Field()        # Optional: language of the transcript if known
     embed_url = scrapy.Field()
     direct_video_url = scrapy.Field()     # Link to MP4/WebM if available
     # Add any other fields you aim to scrape
