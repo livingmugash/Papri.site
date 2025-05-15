@@ -3,16 +3,11 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth.models import User
 from django.utils import timezone
 from django.conf import settings # For accessing settings like MEDIA_ROOT
-
 from rest_framework import status, generics, views
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import api_view, permission_classes
-
-# Import your models
 from .models import SearchTask, VideoSource, SignupCode # Add other models as needed
-
-# Import your serializers (we'll create these next)
 from .serializers import (
     SearchTaskSerializer,
     UserSerializer, # For user details
@@ -359,6 +354,33 @@ class SearchResultsView(views.APIView):
         except Exception as e:
             logger.error(f"SearchResultsView Error for task {task_id}: {e}", exc_info=True)
             return Response({"error": "An unexpected error occurred while fetching results."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            try:
+            # ...
+            detailed_results_list = search_task.detailed_results_info_json or []
+            # ... (fallback if detailed_results_list is empty, video_ids_to_fetch logic) ...
+
+            videos_queryset = Video.objects.filter(id__in=video_ids_to_fetch).prefetch_related('sources')
+            videos_dict = {video.id: video for video in videos_queryset}
+
+            final_results_for_serializer = []
+            # Use detailed_results_list which is already ordered and contains snippets, scores etc.
+            for item_detail in detailed_results_list: # This list comes from RARAgent output stored in SearchTask
+                video = videos_dict.get(item_detail['video_id'])
+                if video:
+                    video.relevance_score = item_detail.get('combined_score', 0.0)
+                    video.match_types = item_detail.get('match_types', [])
+                    video.best_match_timestamp_ms = item_detail.get('best_match_timestamp_ms')
+                    video.text_snippet = item_detail.get('text_snippet') # ADD THIS
+                    final_results_for_serializer.append(video)
+            # ... (serializer = VideoResultSerializer(final_results_for_serializer, ...))
+            # ... (return paginated_response or direct Response) ...
+            serializer = VideoResultSerializer(final_results_for_serializer, many=True, context={'request': request})
+            if self.paginator and page is not None: # page was defined from self.paginate_queryset(final_results_for_serializer)
+                return self.get_paginated_response(serializer.data)
+            else:
+                return Response({"results_data": serializer.data, "count": len(serializer.data), "next":None, "previous":None }, status=status.HTTP_200_OK)
+
+
 
 class ActivateAccountWithCodeView(views.APIView):
     permission_classes = [AllowAny]
