@@ -36,6 +36,7 @@ class Command(BaseCommand):
         limit = options['limit']
         reindex = options['reindex']
         platform_filter = options['platform']
+        force_reindex_flag = options['reindex']
 
         if video_source_ids:
             sources_to_process = VideoSource.objects.filter(id__in=video_source_ids)
