@@ -191,16 +191,24 @@ class SourceOrchestrationAgent:
             {
                 'name': 'PeerTube_Tilvids', 'spider_name': 'peertube', 
                 'base_url': 'https://tilvids.com', 
-                # Tilvids search: https://tilvids.com/search/videos?search=QUERY&searchTarget=local # searchTarget=local or instances
+                Tilvids search: https://tilvids.com/search/videos?search=QUERY&searchTarget=local # searchTarget=local or instances
                 'search_path_template': '/search/videos?search={query}&searchTarget=local', 
                 'default_listing_url': 'https://tilvids.com/videos/recently-added' # Fallback if no query
             },
-            # Add other PeerTube instances or different platforms (Odysee, Rumble etc. would need own spiders)
-            # {
-            #     'name': 'Odysee', 'spider_name': 'odysee_spider', # Hypothetical
-            #     'base_url': 'https://odysee.com',
-            #     'search_path_template': '/$/search?q={query}'
-            # }
+            {
+            'name': f'PeerTube_{urlparse("https://your-chosen-peertube-instance.com").netloc}', # e.g., PeerTube_instance.com
+            'spider_name': 'peertube', # Matches your spider's name attribute
+            'base_url': 'https://your-chosen-peertube-instance.com',
+            # If the instance has a direct search URL that your spider can use:
+            'search_path_template': '/search/videos?search={query}&searchTarget=local',
+            # Fallback if no search_path_template or no query_text:
+            'default_listing_url': 'https://your-chosen-peertube-instance.com/videos/recently-added'
+            },
+            {
+                'name': 'Odysee', 'spider_name': 'odysee_spider', # Hypothetical
+                'base_url': 'https://odysee.com',
+                'search_path_template': '/$/search?q={query}'
+            }
         ]
 
         # Only scrape if it's primarily a text query, or if hybrid query specifies text.
