@@ -4,7 +4,12 @@ from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, No
 from api.models import Transcript, ExtractedKeyword # For saving data
 from django.utils import timezone
 from django.conf import settings # For potential Vector DB connection details
-
+import requests
+import webvtt
+from io import StringIO # For webvtt.read_buffer
+import re # For cleaning VTT text
+from urllib.parse import urlparse, urljoin # For making relative VTT URLs absolute
+# ...
 # For Embeddings
 from sentence_transformers import SentenceTransformer
 # For Vector DB (Example with Milvus client - adapt if using another)
@@ -273,9 +278,9 @@ def process_transcript_for_video_source(self, video_source_obj, raw_video_data_i
                 full_text_parts.append(clean_text)
                 
                 # Optional: extract timing info if needed for transcript_timed_json
-                # start_ms = int(caption.start_in_seconds * 1000)
-                # end_ms = int(caption.end_in_seconds * 1000)
-                # timed_segments.append({'text': clean_text, 'start': start_ms, 'duration': end_ms - start_ms})
+                start_ms = int(caption.start_in_seconds * 1000)
+                end_ms = int(caption.end_in_seconds * 1000)
+                timed_segments.append({'text': clean_text, 'start': start_ms, 'duration': end_ms - start_ms})
 
             full_text = " ".join(full_text_parts).strip()
             self.logger.info(f"TranscriptAnalyzer: Successfully parsed VTT from {vtt_url}. Length: {len(full_text)}")
