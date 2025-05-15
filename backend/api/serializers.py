@@ -157,6 +157,9 @@ class VideoResultSerializer(serializers.ModelSerializer):
             'sources', # This will list associated VideoSource objects
             'relevance_score',
             'matched_snippet',
+            'match_types', 
+            'best_match_timestamp_ms',
+            'text_snippet', # NEW
             'created_at'
         ]
 
