@@ -17,7 +17,14 @@ class Video(models.Model):
     primary_thumbnail_url = models.URLField(max_length=2048, null=True, blank=True, help_text="URL of the primary thumbnail.")
     # A content-based hash for high-level deduplication across different source URLs.
     # Could be a hash of normalized title + duration, or a perceptual hash of a keyframe.
-    deduplication_hash = models.CharField(max_length=255, null=True, blank=True, db_index=True, help_text="Hash for deduplication purposes.")
+    deduplication_hash = models.CharField(
+        max_length=64, # SHA256 hash hex digest
+        null=True, 
+        blank=True, 
+        db_index=True, 
+        unique=True, # IMPORTANT: This makes the hash unique in the DB
+        help_text="SHA256 hash for deduplication based on normalized title and duration."
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
