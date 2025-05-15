@@ -586,4 +586,11 @@ function formatDuration(totalSeconds) {
     //     </div>
     // `;
     // ...
+
+// Example in papriapp.js when fetching results or applying filters
+let resultsUrl = `/api/search/results/<span class="math-inline">\{taskId\}/?page\=</span>{currentPage}`;
+if (platformFilterValue) resultsUrl += `&platform=${platformFilterValue}`;
+if (durationMin) resultsUrl += `&duration_min=${durationMin}`;
+// ... add other filter/sort params ...
+// const response = await fetch(resultsUrl);
                     
