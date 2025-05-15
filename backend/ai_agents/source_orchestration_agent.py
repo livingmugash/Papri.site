@@ -222,3 +222,15 @@ class SourceOrchestrationAgent:
         logger.info(f"SOIAgent: Total raw results from ALL sources (API + Scraped): {len(all_source_results)}")
         return all_source_results
 
+# In _run_scrapy_spider method
+env = os.environ.copy()
+# Add parent of scrapers_base_dir to PYTHONPATH for the subprocess
+# so 'from ..items import PapriVideoItem' can work if items.py is in 'scrapers'
+# and spiders are in 'scrapers/spiders'
+python_path_addition = os.path.dirname(self.scrapers_base_dir) # This would be 'backend/ai_agents'
+env['PYTHONPATH'] = f"{python_path_addition}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+process = subprocess.run(command, cwd=self.scrapers_base_dir, capture_output=True, 
+                         text=True, check=False, timeout=300, encoding='utf-8', 
+                         errors='ignore', env=env) # Pass modified env
+
