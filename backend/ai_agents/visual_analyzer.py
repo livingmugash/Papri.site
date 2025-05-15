@@ -111,51 +111,70 @@ class VisualAnalyzer:
 
 
     def _extract_key_frames_from_video(self, video_file_path, threshold=27.0, min_scene_len_frames=15, downscale_factor=1):
+        # This method from Step 30 is largely robust.
+        # Key focus points for final review:
+        # - video_manager.start() can raise exceptions for corrupt/unsupported files.
+        # - video_manager.get_framerate() returning valid FPS.
+        # - scene_manager.detect_scenes() execution.
+        # - video_manager.seek() and video_manager.read() success.
+        # - Consistent BGR to RGB conversion for PIL.Image.fromarray().
+
         print(f"VA Keyframe: Starting for '{video_file_path}' (Thresh:{threshold}, MinLen:{min_scene_len_frames}, DScale:{downscale_factor})")
         keyframes_with_timestamps = []
         video_manager = None
-        stats_manager = None # Initialize
-        stats_file_path = None # Initialize
-
-        if not os.path.exists(video_file_path):
-            print(f"VA Keyframe: Video file not found at '{video_file_path}'")
+        
+        if not os.path.exists(video_file_path) or os.path.getsize(video_file_path) == 0:
+            print(f"VA Keyframe: Video file not found or empty at '{video_file_path}'")
             return keyframes_with_timestamps
 
         try:
-            # Using a temporary file for stats can be problematic with permissions or cleanup if process crashes.
-            # For robustness, can be omitted or path carefully managed.
-            # stats_file_path = os.path.join(tempfile.gettempdir(), f"{os.path.basename(video_file_path)}.stats.csv")
-            # stats_manager = StatsManager(stats_file_path=stats_file_path, save_on_shutdown=False) # Don't save on shutdown, we'll manage.
-            
-            video_manager = VideoManager([video_file_path]) # No stats_manager for simplicity for now
-            scene_manager = SceneManager() # No stats_manager passed here
+            video_manager = VideoManager([video_file_path])
+            scene_manager = SceneManager()
             scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len_frames))
             base_timecode = video_manager.get_base_timecode()
 
             if downscale_factor > 0 and isinstance(downscale_factor, int):
-                video_manager.set_downscale_factor(downscale_factor)
+                current_height = video_manager.get_video_resolution()[1]
+                if current_height > 480 : # Only downscale if height > 480p for example
+                    video_manager.set_downscale_factor(downscale_factor)
+                    print(f"VA Keyframe: Downscaling by factor {downscale_factor} applied.")
             
             video_manager.start()
             fps = video_manager.get_framerate()
-            if not fps or fps <= 0: # Safety check for invalid FPS
-                print(f"VA Keyframe: Invalid FPS ({fps}) for video '{video_file_path}'. Cannot process.")
-                return keyframes_with_timestamps
-                
+
+            if not fps or fps <= 0:
+                print(f"VA Keyframe: Invalid FPS ({fps}) for video '{video_file_path}'. Cannot process accurately.")
+                # Attempt to get a few frames anyway if duration is known
+                duration_frames = video_manager.get_duration()[0].get_frames()
+                if duration_frames > 1: # Check if any frames at all
+                    # Try to get first, middle, last frame with arbitrary low FPS if actual is unknown
+                    pseudo_fps_for_ts = 1 
+                    frame_numbers_to_try = [0, duration_frames // 2, duration_frames -1]
+                    for frame_num in frame_numbers_to_try:
+                        if video_manager.seek(frame_num) == 0:
+                            frame_img_np = video_manager.read()
+                            if frame_img_np is not False:
+                                pil_img = PILImage.fromarray(frame_img_np[:, :, ::-1].copy())
+                                timestamp_ms = int((frame_num / pseudo_fps_for_ts) * 1000) # Timestamp will be inaccurate
+                                keyframes_with_timestamps.append((pil_img, timestamp_ms))
+                    print(f"VA Keyframe: Invalid FPS, sampled {len(keyframes_with_timestamps)} frames based on frame numbers.")
+                return keyframes_with_timestamps # Return what we have, or empty
+
             print(f"VA Keyframe: Video '{os.path.basename(video_file_path)}' opened. Duration: {base_timecode + video_manager.get_duration()[0]}, FPS: {fps}")
 
             scene_manager.detect_scenes(frame_source=video_manager, show_progress=False)
-            scene_list = scene_manager.get_scene_list(base_timecode) # Get scenes relative to base_timecode
-            
+            scene_list = scene_manager.get_scene_list(base_timecode)
             print(f"VA Keyframe: Detected {len(scene_list)} scenes.")
 
-            if not scene_list: # If no scenes, take a few frames spread across the video
-                num_frames_if_no_scenes = 5 # How many frames to sample
+            if not scene_list:
+                # ... (logic to sample N frames if no scenes, as in Step 30, using valid fps) ...
+                num_frames_if_no_scenes = 5 
                 duration_total_frames = video_manager.get_duration()[0].get_frames()
-                if duration_total_frames > 0:
+                if duration_total_frames > num_frames_if_no_scenes * min_scene_len_frames : # Ensure video is long enough for meaningful samples
                     interval = max(1, duration_total_frames // (num_frames_if_no_scenes + 1))
                     for i in range(1, num_frames_if_no_scenes + 1):
                         frame_num = i * interval
-                        if frame_num >= duration_total_frames: break # Don't go past end
+                        if frame_num >= duration_total_frames: break
                         if video_manager.seek(frame_num) == 0:
                             frame_img_np = video_manager.read()
                             if frame_img_np is not False:
@@ -163,9 +182,10 @@ class VisualAnalyzer:
                                 timestamp_ms = int(FrameTimecode(frame_num, base_timecode).get_seconds() * 1000)
                                 keyframes_with_timestamps.append((pil_img, timestamp_ms))
                     print(f"VA Keyframe: No scenes, sampled {len(keyframes_with_timestamps)} frames.")
-            else:
+                # If video too short for this sampling, may result in 0 keyframes.
+
+            else: # Scenes detected
                 for i, (start_time, end_time) in enumerate(scene_list):
-                    # Get middle frame of the current scene
                     middle_frame_number = start_time.get_frames() + ((end_time.get_frames() - start_time.get_frames()) // 2)
                     if video_manager.seek(middle_frame_number) == 0:
                         frame_img_np = video_manager.read()
@@ -173,21 +193,23 @@ class VisualAnalyzer:
                             pil_img = PILImage.fromarray(frame_img_np[:, :, ::-1].copy())
                             timestamp_ms = int(FrameTimecode(middle_frame_number, base_timecode).get_seconds() * 1000)
                             keyframes_with_timestamps.append((pil_img, timestamp_ms))
-                        # else: print(f"  VA Keyframe: Scene {i+1}, Failed to read frame {middle_frame_number}.") # Too verbose
-                    # else: print(f"  VA Keyframe: Scene {i+1}, Failed to seek to frame {middle_frame_number}.") # Too verbose
             
-        except Exception as e:
+        except Exception as e: # Catch more specific PySceneDetect or OpenCV errors if possible
             print(f"VA Keyframe: Error during keyframe extraction for '{video_file_path}': {type(e).__name__} - {e}")
+            import traceback
+            traceback.print_exc() # Print full traceback for debugging
         finally:
             if video_manager and video_manager.is_started():
                 video_manager.release()
-            # if stats_manager: stats_manager.save_to_csv() # Save if needed
-            # if stats_file_path and os.path.exists(stats_file_path):
-            #     try: os.remove(stats_file_path)
-            #     except OSError: pass
+                print(f"VA Keyframe: VideoManager released for '{os.path.basename(video_file_path)}'.")
 
-        print(f"VA Keyframe: Extracted {len(keyframes_with_timestamps)} keyframes with timestamps for '{os.path.basename(video_file_path)}'.")
+        print(f"VA Keyframe: Extracted {len(keyframes_with_timestamps)} keyframes for '{os.path.basename(video_file_path)}'.")
         return keyframes_with_timestamps
+
+    # ... (index_video_frames method from Step 30/31, which calls _extract_key_frames_from_video, 
+    #      extracts features, and stores them in Django DB & Qdrant, also remains largely the same)
+    # Ensure `index_video_frames` uses the refined `_extract_key_frames_from_video`.
+    # The `min_scene_len_frames_calculated` logic in `index_video_frames` is good.
 
 
     def index_video_frames(self, video_source_obj, video_file_path):
