@@ -5,328 +5,212 @@ import time
 from django.conf import settings # To access API keys
 
 class SourceOrchestrationAgent:
+    # ... (__init__, API search methods as before) ...
     def __init__(self):
         self.youtube_api_key = settings.YOUTUBE_API_KEY
         self.vimeo_access_token = settings.VIMEO_ACCESS_TOKEN
-        # Dailymotion - their API is a bit different, often public access for search
-
-    def search_youtube(self, query_text, max_results=5):
-        print(f"SOIAgent - Searching YouTube for: {query_text}")
-        if not self.youtube_api_key:
-            print("SOIAgent - YouTube API Key not configured.")
-            return []
-
-        search_url = "https://www.googleapis.com/youtube/v3/search"
-        params = {
-            'part': 'snippet',
-            'q': query_text,
-            'key': self.youtube_api_key,
-            'maxResults': max_results,
-            'type': 'video'
-        }
-        try:
-            response = requests.get(search_url, params=params, timeout=10)
-            response.raise_for_status()
-            results = response.json()
-            videos = []
-            for item in results.get('items', []):
-                video_id = item.get('id', {}).get('videoId')
-                if video_id:
-                    videos.append({
-                        'platform_name': 'YouTube',
-                        'platform_video_id': video_id,
-                        'title': item.get('snippet', {}).get('title'),
-                        'description': item.get('snippet', {}).get('description'),
-                        'thumbnail_url': item.get('snippet', {}).get('thumbnails', {}).get('high', {}).get('url'),
-                        'publication_date': item.get('snippet', {}).get('publishedAt'),
-                        'original_url': f"https://www.youtube.com/watch?v={video_id}"
-                        # TODO: Get duration, more details using videos endpoint if needed
-                    })
-            print(f"SOIAgent - YouTube found {len(videos)} videos.")
-            return videos
-        except requests.exceptions.RequestException as e:
-            print(f"SOIAgent - Error searching YouTube: {e}")
-            return []
-        except Exception as e:
-            print(f"SOIAgent - Unexpected error in Youtube: {e}")
-            return []
+        # Scrapy executable path, found once
+        self.scrapy_executable = shutil.which('scrapy')
+        if not self.scrapy_executable:
+            logger.error("SOIAgent: Scrapy executable not found in PATH. Scraping will be disabled.")
+        # Path to the Scrapy project (if you structure it as a full project)
+        # For standalone spiders, it's where the spiders directory is.
+        self.scrapers_base_dir = os.path.join(settings.BASE_DIR, 'ai_agents', 'scrapers')
+        # If you create a scrapy.cfg at self.scrapers_base_dir, Scrapy will treat it as project root.
+        # Example minimal scrapy.cfg:
+        # [settings]
+        # default = scrapers.settings # Assumes scrapers/settings.py
+        # [deploy]
+        # project = scrapers
 
 
-    def search_vimeo(self, query_text, max_results=5):
-        print(f"SOIAgent - Searching Vimeo for: {query_text}")
-        if not self.vimeo_access_token:
-            print("SOIAgent - Vimeo Access Token not configured.")
-            return []
-
-        search_url = "https://api.vimeo.com/videos"
-        headers = {
-            'Authorization': f'Bearer {self.vimeo_access_token}',
-            'Accept': 'application/vnd.vimeo.*+json;version=3.4'
-        }
-        params = {
-            'query': query_text,
-            'per_page': max_results,
-            'sort': 'relevant', # or 'date', 'alphabetical', 'plays', 'likes', 'comments', 'duration'
-            'direction': 'desc'
-        }
-        try:
-            response = requests.get(search_url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            results = response.json()
-            videos = []
-            for item in results.get('data', []):
-                videos.append({
-                    'platform_name': 'Vimeo',
-                    'platform_video_id': item.get('uri', '').split('/')[-1] if item.get('uri') else None,
-                    'title': item.get('name'),
-                    'description': item.get('description'),
-                    'thumbnail_url': item.get('pictures', {}).get('base_link') if item.get('pictures') else None,
-                    'publication_date': item.get('created_time'),
-                    'duration_seconds': item.get('duration'),
-                    'original_url': item.get('link'),
-                    'embed_url': item.get('player_embed_url')
-                })
-            print(f"SOIAgent - Vimeo found {len(videos)} videos.")
-            return videos
-        except requests.exceptions.RequestException as e:
-            print(f"SOIAgent - Error searching Vimeo: {e}")
-            return []
-        except Exception as e:
-            print(f"SOIAgent - Unexpected error in Vimeo search: {e}")
-            return []
-
-    def search_dailymotion(self, query_text, max_results=5):
-        print(f"SOIAgent - Searching Dailymotion for: {query_text}")
-        # Dailymotion public API for search (no key needed for basic search)
-        # https://developers.dailymotion.com/api/#video-search
-        search_url = "https://api.dailymotion.com/videos"
-        params = {
-            'fields': 'id,title,description,thumbnail_large_url,created_time,duration,url,embed_url',
-            'search': query_text,
-            'limit': max_results,
-            'sort': 'relevance' # or 'recent', 'visited', 'visited-hour', 'visited-today', 'visited-week', 'visited-month'
-        }
-        try:
-            response = requests.get(search_url, params=params, timeout=10)
-            response.raise_for_status()
-            results = response.json()
-            videos = []
-            for item in results.get('list', []):
-                videos.append({
-                    'platform_name': 'Dailymotion',
-                    'platform_video_id': item.get('id'),
-                    'title': item.get('title'),
-                    'description': item.get('description'),
-                    'thumbnail_url': item.get('thumbnail_large_url'),
-                    'publication_date': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(item.get('created_time'))) if item.get('created_time') else None, # Convert timestamp
-                    'duration_seconds': item.get('duration'),
-                    'original_url': item.get('url'),
-                    'embed_url': item.get('embed_url')
-                })
-            print(f"SOIAgent - Dailymotion found {len(videos)} videos.")
-            return videos
-        except requests.exceptions.RequestException as e:
-            print(f"SOIAgent - Error searching Dailymotion: {e}")
-            return []
-        except Exception as e:
-            print(f"SOIAgent - Unexpected error in Dailymotion search: {e}")
-            return []
-
-
-    def fetch_content_from_sources(self, processed_query_data):
-        # This is a simplified orchestrator for fetching
-        all_source_results = []
-        query_text = processed_query_data.get('processed_query', '') # Use processed query
-
-        if not query_text and processed_query_data.get('intent') != 'visual_similarity_search':
-            print("SOIAgent - No query text to search with.")
-            return all_source_results
-
-        # For text search intent
-        if processed_query_data.get('intent') == 'general_video_search' and query_text:
-            youtube_results = self.search_youtube(query_text)
-            all_source_results.extend(youtube_results)
-            time.sleep(0.5) # Basic rate limiting
-
-            vimeo_results = self.search_vimeo(query_text)
-            all_source_results.extend(vimeo_results)
-            time.sleep(0.5)
-
-            dailymotion_results = self.search_dailymotion(query_text)
-            all_source_results.extend(dailymotion_results)
-
-        # For image search intent, SOIAgent's role might be different (e.g., finding videos
-        # that then need frame analysis by CAAgent, or directly querying image-searchable video APIs if they exist)
-        # For now, we assume image search primarily relies on our indexed visual features.
-        # If a text query accompanies an image search, it might be used to filter candidate videos.
-
-        print(f"SOIAgent - Total raw results from APIs: {len(all_source_results)}")
-        return all_source_results
-
-
-def _run_scrapy_spider(self, spider_name, start_url, output_file_path):
-        """
-        Runs a Scrapy spider as a subprocess.
-        spider_name: Name of the spider (e.g., 'peertube').
-        start_url: The initial URL for the spider to crawl.
-        output_file_path: Path to save the JSON output.
-        Returns True if successful, False otherwise.
-        """
-        scrapy_project_dir = os.path.join(settings.BASE_DIR, 'ai_agents', 'scrapers') # Path to where spiders are
-        scrapy_executable = shutil.which('scrapy') # Find scrapy executable
-
-        if not scrapy_executable:
-            self.logger.error("Scrapy executable not found in PATH.")
+    def _run_scrapy_spider(self, spider_name, start_url_for_spider, target_domain_for_spider, output_file_path, max_items_scraped):
+        if not self.scrapy_executable:
+            logger.error("SOIAgent: Scrapy executable not available. Cannot run spider.")
             return False
         
-        # Ensure allowed_domains is correctly set if spider uses it.
-        # The spider init can take start_url and derive allowed_domains.
         command = [
-            scrapy_executable,
-            'crawl',
-            spider_name,
-            '-a', f'start_url={start_url}',
-            '-o', output_file_path, # Output items to a JSON file
-            '-s', 'LOG_LEVEL=INFO', # Control Scrapy log level
-            # '--nolog' # To suppress Scrapy logs almost entirely if too noisy
+            self.scrapy_executable, 'crawl', spider_name,
+            '-a', f'start_url={start_url_for_spider}',
+            '-a', f'target_domain={target_domain_for_spider}',
+            '-a', f'max_items_to_scrape={max_items_scraped}', # Pass max_items to spider
+            '-o', output_file_path,
+            '-s', 'LOG_LEVEL=INFO', # Scrapy's own logging
+            # To ensure items.py is found if running from a different CWD,
+            # you might need to set PYTHONPATH or ensure Scrapy is run from a "project" root.
+            # This command assumes spiders are in a 'spiders' subdir of `self.scrapers_base_dir`
+            # and items.py is also in `self.scrapers_base_dir` or configured in a Scrapy settings file.
         ]
         
-        self.logger.info(f"SOIAgent: Running Scrapy command: {' '.join(command)} from cwd: {scrapy_project_dir}")
+        logger.info(f"SOIAgent: Running Scrapy: {' '.join(command)}")
         try:
-            # Run from the directory containing scrapy.cfg if you have one, or where spiders are.
-            # For now, assuming spiders can be run from anywhere if settings are self-contained or passed via -s.
-            # If your spiders are part of a Scrapy project, you must run 'scrapy crawl' from the project's root.
-            # This current setup assumes spiders are standalone runnable.
-            process = subprocess.run(command, cwd=scrapy_project_dir, capture_output=True, text=True, check=False, timeout=300) # 5 min timeout
+            # Running from scrapers_base_dir assumes your spiders and items are structured relative to it.
+            process = subprocess.run(command, cwd=self.scrapers_base_dir, capture_output=True, text=True, check=False, timeout=300, encoding='utf-8', errors='ignore')
             
             if process.returncode != 0:
-                self.logger.error(f"SOIAgent: Scrapy spider '{spider_name}' failed for {start_url}. Return code: {process.returncode}")
-                self.logger.error(f"Stderr: {process.stderr[-500:]}") # Log last 500 chars of error
+                logger.error(f"SOIAgent: Scrapy spider '{spider_name}' failed for {start_url_for_spider}. Code: {process.returncode}. Stderr: {process.stderr[-500:]}")
                 return False
             
-            self.logger.info(f"SOIAgent: Scrapy spider '{spider_name}' completed for {start_url}. Output at {output_file_path}")
+            logger.info(f"SOIAgent: Scrapy spider '{spider_name}' completed for {start_url_for_spider}. Output: {output_file_path}")
             return True
-        except subprocess.TimeoutExpired:
-            self.logger.error(f"SOIAgent: Scrapy spider '{spider_name}' timed out for {start_url}.")
+        except subprocess.TimeoutExpired: # ...
+            logger.error(f"SOIAgent: Scrapy spider '{spider_name}' timed out for {start_url_for_spider}.")
             return False
-        except Exception as e:
-            self.logger.error(f"SOIAgent: Exception running Scrapy spider '{spider_name}' for {start_url}: {e}")
+        except Exception as e: # ...
+            logger.error(f"SOIAgent: Exception running Scrapy spider '{spider_name}' for {start_url_for_spider}: {e}")
             return False
 
-    def search_peertube_instance(self, instance_base_url, query_text, max_items_overall=10):
-        """
-        Searches a PeerTube instance using a conceptual Scrapy spider.
-        NOTE: PeerTube instances often have their own search API (?search=query) which might be better than broad crawling.
-              This method demonstrates general scraping.
-        """
-        self.logger.info(f"SOIAgent: Scraping PeerTube instance {instance_base_url} for query '{query_text}' (conceptual).")
+    def _parse_duration_str(self, duration_str): # Renamed from _parse_duration
+        # ... (Robust duration parsing logic as sketched before) ...
+        # Example for PTxMxS and HH:MM:SS or MM:SS
+        if not duration_str: return None
+        import re
+        duration_str = str(duration_str).upper()
+        if duration_str.startswith("PT"): # ISO 8601 Duration like PT10M32S or PT1H5M2S
+            h, m, s = 0, 0, 0
+            h_match = re.search(r'(\d+)H', duration_str)
+            if h_match: h = int(h_match.group(1))
+            m_match = re.search(r'(\d+)M', duration_str)
+            if m_match: m = int(m_match.group(1))
+            s_match = re.search(r'(\d+)S', duration_str)
+            if s_match: s = int(s_match.group(1))
+            return h * 3600 + m * 60 + s
+        else: # Try HH:MM:SS or MM:SS or SS
+            parts = [int(p) for p in duration_str.split(':') if p.isdigit()]
+            if len(parts) == 3: return parts[0]*3600 + parts[1]*60 + parts[2]
+            if len(parts) == 2: return parts[0]*60 + parts[1]
+            if len(parts) == 1: return parts[0]
+        return None
         
-        # For PeerTube, direct search URL is usually like: {instance_base_url}/search/videos?search={query_text}
-        # The spider would start there.
-        # However, the generic spider above starts from a listing page.
-        # This part needs to align with how your spider is designed to receive search queries or start pages.
+    def _parse_publication_date(self, date_str):
+        if not date_str: return None
+        from dateutil import parser
+        try:
+            # robustly parse various date formats
+            dt_obj = parser.parse(date_str)
+            # Convert to UTC if timezone naive, or ensure it's aware and UTC
+            if dt_obj.tzinfo is None:
+                dt_obj = timezone.make_aware(dt_obj, timezone.get_default_timezone()) # Assume default Django TZ
+            return dt_obj.astimezone(timezone.utc).isoformat() # Standard ISO format string
+        except (ValueError, TypeError):
+            logger.warning(f"SOIAgent: Could not parse date string: {date_str}")
+            return None
 
-        # For a generic spider that browses, the query_text might not be directly used by the spider's start_url.
-        # The spider would fetch many videos, and filtering by query_text would happen post-scraping.
-        # This is INEFFICIENT for targeted search.
-        # A BETTER spider would take the query and use PeerTube's search URL.
 
-        # For now, let's assume the spider starts from a general video listing (e.g., /videos/local)
-        # and we'll filter results later. This is just to get the scraping mechanism working.
+    def search_scraped_platform(self, platform_config, query_text, max_items=10):
+        """
+        Generic method to search a platform using its configured Scrapy spider.
+        platform_config: dict like {'name': 'PeerTube_tilvids.com', 'spider_name': 'peertube', 
+                                     'base_url': 'https://tilvids.com', 
+                                     'search_path_template': '/search/videos?search={query}'}
+        """
+        spider_name = platform_config['spider_name']
+        base_url = platform_config['base_url']
+        target_domain = urlparse(base_url).netloc
+
+        # Construct start URL: if platform has a search path, use it. Otherwise, spider might browse.
+        if platform_config.get('search_path_template') and query_text:
+            search_path = platform_config['search_path_template'].format(query=requests.utils.quote(query_text))
+            start_url_for_spider = base_url.rstrip('/') + search_path
+        else: # Fallback to a generic listing page defined in platform_config or spider default
+            start_url_for_spider = platform_config.get('default_listing_url', base_url)
         
-        scraped_items = []
-        # Create a temporary file for Scrapy output
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json', dir=settings.MEDIA_ROOT) as tmp_output_file:
+        logger.info(f"SOIAgent: Scraping {platform_config['name']} via spider '{spider_name}', start URL: {start_url_for_spider}")
+        
+        scraped_items_converted = []
+        # Create a temporary file for Scrapy output within MEDIA_ROOT/temp_scrapy_outputs
+        temp_scrapy_dir = os.path.join(settings.MEDIA_ROOT, "temp_scrapy_outputs")
+        os.makedirs(temp_scrapy_dir, exist_ok=True)
+
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json', dir=temp_scrapy_dir, prefix=f"{spider_name}_") as tmp_output_file:
             tmp_output_file_path = tmp_output_file.name
         
-        # Example start URL (replace with actual logic, e.g., using PeerTube's search endpoint)
-        # For actual search: target_start_url = f"{instance_base_url}/search/videos?search={requests.utils.quote(query_text)}"
-        target_start_url = f"{instance_base_url}/videos/recently-added" # Example generic page
-
-        if self._run_scrapy_spider('peertube', target_start_url, tmp_output_file_path):
+        if self._run_scrapy_spider(spider_name, start_url_for_spider, target_domain, tmp_output_file_path, max_items):
             try:
-                with open(tmp_output_file_path, 'r') as f:
-                    # Scrapy -o outputs one JSON object per line if format is jsonlines (default for .jsonl)
-                    # or a single JSON array if format is json. Assume JSON array for now.
-                    try:
-                        raw_scraped_data = json.load(f)
-                        if isinstance(raw_scraped_data, list):
-                            for item in raw_scraped_data:
-                                # Convert to the common format expected by the orchestrator
-                                # This mapping depends on your PapriVideoItem fields
-                                converted_item = {
-                                    'platform_name': item.get('platform_name', 'PeerTubeScraped'),
-                                    'platform_video_id': item.get('platform_video_id'),
-                                    'title': item.get('title'),
-                                    'description': item.get('description'),
-                                    'thumbnail_url': item.get('thumbnail_url'),
-                                    'publication_date': item.get('publication_date_str'), # Needs parsing
-                                    'duration_seconds': self._parse_duration(item.get('duration_str')), # Needs parsing
-                                    'original_url': item.get('original_url'),
-                                    'embed_url': item.get('embed_url') or item.get('direct_video_url')
-                                    # Add other fields as needed
-                                }
-                                # Filter by query_text (rudimentary) if spider didn't use search endpoint
-                                if query_text and query_text.lower() not in (converted_item.get('title','').lower() + converted_item.get('description','').lower()):
-                                    continue # Skip if no keyword match (very basic filtering)
-                                scraped_items.append(converted_item)
-                                if len(scraped_items) >= max_items_overall: break
-                        else:
-                             self.logger.warning(f"SOIAgent: Scrapy output for PeerTube was not a list: {type(raw_scraped_data)}")
-                    except json.JSONDecodeError:
-                        self.logger.error(f"SOIAgent: Failed to decode JSON from Scrapy output: {tmp_output_file_path}")
-            finally:
-                os.remove(tmp_output_file_path) # Clean up temp file
-        
-        self.logger.info(f"SOIAgent: PeerTube scraping yielded {len(scraped_items)} items after basic filtering.")
-        return scraped_items
+                with open(tmp_output_file_path, 'r', encoding='utf-8') as f:
+                    raw_scraped_data = json.load(f) # Assumes Scrapy outputs a JSON list
+                
+                if isinstance(raw_scraped_data, list):
+                    for item in raw_scraped_data:
+                        # Basic filtering if spider didn't handle search query directly (less efficient)
+                        title_desc = (item.get('title','_') + item.get('description','_')).lower()
+                        if query_text and not all(kw.lower() in title_desc for kw in query_text.split() if len(kw)>2):
+                             # If query_text provided and not all its significant words are in title/desc, skip
+                             # This is a very loose filter. Spider-level search is better.
+                             # logger.info(f"SOIAgent: Skipping item '{item.get('title')}' due to post-scrape keyword filter mismatch for query '{query_text}'.")
+                             pass # For now, let's not filter here and let RARAgent do it, or improve spider.
 
-    def _parse_duration(self, duration_str): # Helper
-        if not duration_str: return None
-        # Example: "PT10M32S" (ISO 8601 duration) or "10:32"
-        # This needs robust parsing based on what PeerTube (or other sites) provide.
-        # For now, a very simple H:M:S or M:S parser
-        parts = str(duration_str).split(':')
-        try:
-            if len(parts) == 3: return int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
-            if len(parts) == 2: return int(parts[0])*60 + int(parts[1])
-            if len(parts) == 1 and duration_str.upper().startswith("PT"): # Basic ISO 8601 like PT10M32S
-                # Rudimentary ISO 8601 duration parsing (only M and S)
-                import re
-                m = re.search(r'(\d+)M', duration_str.upper())
-                s = re.search(r'(\d+)S', duration_str.upper())
-                return (int(m.group(1)) * 60 if m else 0) + (int(s.group(1)) if s else 0)
-            return int(duration_str) # Assume seconds if single number
-        except: return None
+                        converted = {
+                            'platform_name': item.get('platform_name', platform_config['name']),
+                            'platform_video_id': item.get('platform_video_id'),
+                            'title': item.get('title'),
+                            'description': item.get('description'),
+                            'thumbnail_url': item.get('thumbnail_url'),
+                            'publication_date': self._parse_publication_date(item.get('publication_date_str')),
+                            'duration_seconds': self._parse_duration_str(item.get('duration_str')),
+                            'original_url': item.get('original_url'),
+                            'embed_url': item.get('embed_url') or item.get('direct_video_url'),
+                            'uploader_name': item.get('uploader_name'),
+                            'tags': item.get('tags', []),
+                            # TODO: Transcript handling (download VTT if transcript_vtt_url exists)
+                        }
+                        # Ensure essential fields are present
+                        if converted['original_url'] and converted['title']:
+                            scraped_items_converted.append(converted)
+                else:
+                    logger.warning(f"SOIAgent: Scrapy output for {platform_config['name']} was not a list.")
+            except json.JSONDecodeError:
+                logger.error(f"SOIAgent: Failed to decode JSON from Scrapy output: {tmp_output_file_path}")
+            except Exception as e:
+                logger.error(f"SOIAgent: Error processing Scrapy output for {platform_config['name']}: {e}")
+            finally:
+                if os.path.exists(tmp_output_file_path): os.remove(tmp_output_file_path)
+        else: # Spider run failed
+             if os.path.exists(tmp_output_file_path): os.remove(tmp_output_file_path) # Still cleanup
+
+        logger.info(f"SOIAgent: {platform_config['name']} scraping yielded {len(scraped_items_converted)} converted items.")
+        return scraped_items_converted
 
 
     def fetch_content_from_sources(self, processed_query_data):
         all_source_results = []
-        query_text = processed_query_data.get('processed_query', '')
-        # ... (existing API calls for YouTube, Vimeo, Dailymotion) ...
-        # youtube_results = self.search_youtube(query_text)
-        # all_source_results.extend(youtube_results); time.sleep(0.2)
-        # vimeo_results = self.search_vimeo(query_text)
-        # all_source_results.extend(vimeo_results); time.sleep(0.2)
-        # dailymotion_results = self.search_dailymotion(query_text)
-        # all_source_results.extend(dailymotion_results); time.sleep(0.2)
+        query_text_for_apis = processed_query_data.get('processed_query', '') # Use QAgent's processed query for APIs
+        query_original_text = processed_query_data.get('original_query', '') # Use original for scrapers if better
 
-        # Example: Add scraping for a specific PeerTube instance if query matches certain criteria
-        # This logic needs to be much more dynamic based on a list of scrapeable sources.
-        if "peertube" in query_text.lower() or True: # For testing, always try scraping one
-            # You'd have a list of PeerTube instances to try, or allow users to add them.
-            # Replace with an actual, publicly browsable PeerTube instance URL known for SFW content for testing
-            test_peertube_instance_url = "https://tilvids.com" # EXAMPLE! CHECK TERMS OF SERVICE
-            if test_peertube_instance_url:
-                 self.logger.info(f"Attempting to scrape Peertube instance: {test_peertube_instance_url}")
-                 peertube_scraped_results = self.search_peertube_instance(test_peertube_instance_url, query_text, max_items_overall=5)
-                 all_source_results.extend(peertube_scraped_results)
+        # --- API Sources ---
+        if query_text_for_apis: # Only call APIs if there's text
+            # ... (search_youtube, search_vimeo, search_dailymotion calls as before using query_text_for_apis) ...
+            all_source_results.extend(self.search_youtube(query_text_for_apis, max_results=7))
+            all_source_results.extend(self.search_vimeo(query_text_for_apis, max_results=7))
+            all_source_results.extend(self.search_dailymotion(query_text_for_apis, max_results=7))
+
+
+        # --- Scraped Sources (Example) ---
+        # This would come from a configuration or database of scrapeable platforms
+        scrapeable_platforms = [
+            {
+                'name': 'PeerTube_Tilvids', 'spider_name': 'peertube', 
+                'base_url': 'https://tilvids.com', 
+                # Tilvids search: https://tilvids.com/search/videos?search=QUERY&searchTarget=local # searchTarget=local or instances
+                'search_path_template': '/search/videos?search={query}&searchTarget=local', 
+                'default_listing_url': 'https://tilvids.com/videos/recently-added' # Fallback if no query
+            },
+            # Add other PeerTube instances or different platforms (Odysee, Rumble etc. would need own spiders)
+            # {
+            #     'name': 'Odysee', 'spider_name': 'odysee_spider', # Hypothetical
+            #     'base_url': 'https://odysee.com',
+            #     'search_path_template': '/$/search?q={query}'
+            # }
+        ]
+
+        # Only scrape if it's primarily a text query, or if hybrid query specifies text.
+        # Avoid broad scraping for pure visual queries unless a specific strategy is in place.
+        if query_original_text and processed_query_data.get('intent') in ['general_video_search', 'hybrid_text_visual_search']:
+            for platform_config in scrapeable_platforms:
+                time.sleep(0.5) # Basic courtesy delay between different platforms/spiders
+                scraped_data = self.search_scraped_platform(platform_config, query_original_text, max_items=5) # Limit items per scraped source
+                all_source_results.extend(scraped_data)
         
-        self.logger.info(f"SOIAgent: Total raw results from ALL sources: {len(all_source_results)}")
+        logger.info(f"SOIAgent: Total raw results from ALL sources (API + Scraped): {len(all_source_results)}")
         return all_source_results
 
-    # Add a logger to SOIAgent (and other agents) for better debugging
-    @property
-    def logger(self):
-        import logging
-        return logging.getLogger(__name__) # Gets a logger named after the module
