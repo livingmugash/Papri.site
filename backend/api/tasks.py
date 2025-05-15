@@ -10,10 +10,8 @@ import subprocess
 import tempfile
 from api.models import VideoSource # Assuming models are in api.models
 from .analyzer_instances import visual_analyzer_instance # Using a shared instance
-
-# Create backend/api/analyzer_instances.py:
-# from backend.ai_agents.visual_analyzer import VisualAnalyzer
-# visual_analyzer_instance = VisualAnalyzer() # Instantiate once
+from backend.ai_agents.visual_analyzer import VisualAnalyzer
+visual_analyzer_instance = VisualAnalyzer() # Instantiate once
 # T
 
 @shared_task(bind=True, name='api.index_video_visual_features', acks_late=True, time_limit=3600, max_retries=1, default_retry_delay=60*5) # Increased time limit to 1hr, added retry delay
@@ -133,7 +131,7 @@ def process_search_query(self, search_task_id):
             
             # Optionally store the detailed scores and match types
             # Add a new JSONField to SearchTask model: e.g., detailed_ranking_info_json
-            # search_task.detailed_ranking_info_json = orchestration_result.get("results_data_detailed")
+            search_task.detailed_ranking_info_json = orchestration_result.get("results_data_detailed")
         else:
             # ... (error handling) ...
         
