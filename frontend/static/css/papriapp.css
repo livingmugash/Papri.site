@@ -1,58 +1,114 @@
 /* frontend/static/css/papriapp.css */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
 body {
+    font-family: 'Poppins', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    @apply bg-slate-100 text-slate-800;
 }
 
-/* Sidebar Customizations if needed */
+/* Scrollbar Styling (Optional but nice) */
+body::-webkit-scrollbar { width: 8px; }
+body::-webkit-scrollbar-track { background: #e2e8f0; /* slate-200 */ }
+body::-webkit-scrollbar-thumb { background-color: #a5b4fc; /* indigo-300 */ border-radius: 10px; border: 2px solid #e2e8f0; }
+
+/* Sidebar */
+#sidebar {
+    /* Base styles in HTML via Tailwind, transition on 'transform' */
+}
+#sidebar .nav-item { /* Tailwind classes applied in HTML for base, active, hover */
+    @apply flex items-center px-4 py-2.5 text-sm font-medium rounded-md mx-2 transition-colors duration-150 ease-in-out;
+}
 #sidebar .nav-item .nav-icon {
-    @apply transition-colors duration-150;
+    @apply w-5 h-5 mr-3 text-slate-400 group-hover:text-indigo-600 transition-colors duration-150;
+}
+#sidebar .nav-item.active {
+    @apply bg-indigo-50 text-indigo-700 font-semibold;
 }
 #sidebar .nav-item.active .nav-icon {
     @apply text-indigo-600;
 }
-#sidebar .nav-item:not(.active):hover .nav-icon {
-    @apply text-slate-600;
+#sidebar .user-avatar { /* Ensure consistency if image is used later */
+    @apply object-cover;
 }
 
-/* Ensure result cards have a min-height or content looks okay when empty */
+/* Main content */
+.app-view {
+    animation: fadeIn 0.3s ease-out;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Search Form & Filters */
+#papri-search-form textarea,
+#papri-search-form input[type="url"],
+#search-filters-container select.filter-input,
+#search-filters-container input[type="date"].filter-input {
+    @apply block w-full px-3 py-2 border border-slate-300 rounded-lg shadow-sm 
+           focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 
+           text-sm transition-colors duration-150 ease-in-out;
+}
+#search-filters-container select.filter-input {
+    @apply pr-8; /* Space for dropdown arrow */
+}
+
+
+/* Result Card Styling */
 .result-card {
-    min-height: 150px; /* Adjust as needed */
+    /* Base styles via Tailwind in JS, ensure min-height if content is sparse */
+    /* min-height: 160px; */ /* Example */
+}
+.result-card .thumbnail-container img {
+    transition: transform 0.3s ease-out;
+}
+.result-card .thumbnail-container:hover img {
+    transform: scale(1.05);
+}
+.result-card .result-description { /* For description paragraph */
+    display: -webkit-box;
+    -webkit-line-clamp: 3; /* Max 3 lines */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.result-card .match-info-area .italic { /* Snippet styling */
+    line-height: 1.5;
 }
 
-/* Spinner (if not using Lucide for everything) */
-.spinner {
-    border: 3px solid rgba(255, 255, 255, 0.3);
-    border-left-color: #FFF; /* Or your theme color */
+/* Action Buttons on Cards */
+.action-button {
+    @apply inline-flex items-center px-3 py-1.5 border border-slate-300 text-xs font-medium rounded-md text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-offset-1 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap;
+}
+.action-button .action-icon {
+    @apply w-3.5 h-3.5 mr-1.5;
+}
+
+
+/* Search Status Message (spinner part) */
+.search-status-message .spinner {
+    border: 3px solid rgba(79, 70, 229, 0.2); /* indigo-600 opacity 20% */
+    border-left-color: #4f46e5; /* indigo-600 */
     border-radius: 50%;
-    width: 1em; height: 1em;
+    width: 1.1em; height: 1.1em;
     animation: spin 1s linear infinite;
     display: inline-block;
-    vertical-align: middle;
+    vertical-align: -0.2em; /* Align better with text */
 }
-/* For spinners within colored buttons, adjust border-left-color */
-button .spinner { border-left-color: currentColor; } /* Inherits button text color */
-.search-status-message .spinner { @apply border-slate-400 border-l-indigo-600; } /* Custom for status div */
+@keyframes spin { to { transform: rotate(360deg); } }
 
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
+/* Pagination */
+#pagination-controls button:disabled {
+    @apply cursor-not-allowed opacity-50;
 }
 
-/* Tooltip styling (from your V4 example, slightly adapted) */
-#dynamic-tooltip {
-    /* Tailwind classes are applied in JS, these are fallbacks or base */
-    background-color: #1f2937; /* bg-slate-800 */
-    color: white;
-    padding: 0.25rem 0.5rem; /* px-2 py-1 */
-    border-radius: 0.25rem; /* rounded */
-    font-size: 0.75rem; /* text-xs */
-    font-weight: 500; /* font-medium */
-    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); /* shadow-lg */
-    z-index: 500;
+/* Plyr Player Customizations (Optional) */
+.video-player-container .plyr {
+    @apply rounded-lg overflow-hidden;
+    /* --plyr-color-main: #6366f1; */ /* Indigo-500 - already set in JS */
 }
 
-/* Player wrapper styling */
-.video-player-wrapper {
-    position: relative; /* For potential absolute positioned elements inside like close button */
-}
+/* Dynamic Tooltip Styling (as in Step 41) */
+/* ... */
