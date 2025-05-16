@@ -1,10 +1,23 @@
 # backend/api/analyzer_instances.py
-# This file helps manage singleton instances of heavy objects for Celery tasks.
 from backend.ai_agents.visual_analyzer import VisualAnalyzer
-# from backend.ai_agents.transcript_analyzer import TranscriptAnalyzer # If needed similarly
+from backend.ai_agents.transcript_analyzer import TranscriptAnalyzer
+import logging
 
-# Instantiate once when the Celery worker process starts.
-visual_analyzer_instance = VisualAnalyzer()
-# transcript_analyzer_instance = TranscriptAnalyzer()
+logger = logging.getLogger(__name__)
 
-print("Analyzer instances initialized.")
+try:
+    visual_analyzer_instance = VisualAnalyzer()
+    logger.info("Successfully initialized visual_analyzer_instance.")
+except Exception as e:
+    visual_analyzer_instance = None
+    logger.error(f"Failed to initialize visual_analyzer_instance: {e}", exc_info=True)
+
+try:
+    transcript_analyzer_instance = TranscriptAnalyzer()
+    logger.info("Successfully initialized transcript_analyzer_instance.")
+except Exception as e:
+    transcript_analyzer_instance = None
+    logger.error(f"Failed to initialize transcript_analyzer_instance: {e}", exc_info=True)
+
+# This ensures that even if one fails, the worker might still start and other tasks can run.
+# The tasks themselves should check if the instance is None.
