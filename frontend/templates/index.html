@@ -1,1 +1,314 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Language" content="en">
+    <title data-translate-key="page_title">Papri - Instantly Find Any Moment in Your Videos</title>
+    <meta name="description" content="Papri is an AI-powered video search engine that helps you find exact moments in videos using text, concepts, or screenshots. Stop scrubbing, start finding!">
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="{% static 'css/index.css' %}">
+    <script src="https://unpkg.com/lucide-react@0.395.0/dist/umd/lucide.min.js"></script>
+
+    <link rel="icon" href="{% static 'images/favicon.ico' %}" type="image/x-icon">
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static 'images/apple-touch-icon.png' %}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'images/favicon-32x32.png' %}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{% static 'images/favicon-16x16.png' %}">
+    </head>
+<body class="antialiased text-slate-700 bg-white">
+
+    <header id="header" class="sticky top-0 z-50 w-full border-b border-slate-200 bg-white/95 backdrop-blur-sm">
+        <nav class="container mx-auto px-4 lg:px-6 py-3 flex justify-between items-center">
+            <a href="#hero" class="flex items-center space-x-1 text-3xl font-bold text-indigo-600">
+                <span>P</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-play transform scale-x-[-1] rotate-[-90deg] w-6 h-6 inline-block"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <span>pri</span>
+            </a>
+            <div class="hidden md:flex items-center space-x-6">
+                <a href="#try" class="nav-link" data-translate-key="nav_try">Try Papri</a>
+                <a href="#why-papri" class="nav-link" data-translate-key="nav_why">Why Papri?</a>
+                <a href="#steps" class="nav-link" data-translate-key="nav_how">How it Works</a>
+                <a href="#pricing" class="nav-link" data-translate-key="nav_pricing">Pricing</a>
+                <a href="#faq" class="nav-link" data-translate-key="nav_faq">FAQ</a>
+            </div>
+            <div class="flex items-center space-x-2">
+                 <a href="{% provider_login_url 'google' process='login' next='/app/' %}" 
+                    class="px-4 py-2 text-sm font-medium text-indigo-600 border border-indigo-600 rounded-md hover:bg-indigo-50 transition duration-150 ease-in-out"
+                    data-translate-key="button_login">Login</a>
+                 <a href="{% provider_login_url 'google' process='login' next='/app/' %}"  {# Or a dedicated signup view that then leads to Google #}
+                    class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition duration-150 ease-in-out"
+                    data-translate-key="button_signup">Sign Up</a>
+                 <button id="mobile-menu-button" class="md:hidden p-2 rounded-md text-slate-500 hover:text-indigo-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500" aria-label="Open main menu">
+                    <i data-lucide="menu" class="w-6 h-6"></i>
+                 </button>
+            </div>
+        </nav>
+         <div id="mobile-menu" class="hidden md:hidden border-t border-slate-200">
+            <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+                <a href="#try" class="nav-link-mobile" data-translate-key="nav_try">Try Papri</a>
+                <a href="#why-papri" class="nav-link-mobile" data-translate-key="nav_why">Why Papri?</a>
+                <a href="#steps" class="nav-link-mobile" data-translate-key="nav_how">How it Works</a>
+                <a href="#pricing" class="nav-link-mobile" data-translate-key="nav_pricing">Pricing</a>
+                <a href="#faq" class="nav-link-mobile" data-translate-key="nav_faq">FAQ</a>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section id="hero" class="pt-20 pb-10 md:pt-28 md:pb-16 bg-gradient-to-br from-white via-indigo-50 to-purple-50">
+            <div class="container mx-auto px-4 text-center">
+                 <span class="inline-block px-3 py-1 text-xs font-semibold tracking-wider text-indigo-700 uppercase bg-indigo-100 rounded-full" data-translate-key="hero_badge">
+                     New AI-Powered Video Search
+                 </span>
+                <h1 class="mt-6 text-4xl md:text-5xl lg:text-6xl font-extrabold text-slate-900 leading-tight" data-translate-key="hero_title">
+                    Stop Searching, Start Finding. <br class="sm:hidden">#ShazamForContent!
+                </h1>
+                <p class="mt-4 text-lg md:text-xl text-slate-600 max-w-3xl mx-auto" data-translate-key="hero_subtitle">
+                    Instantly Access Any Moment<br class="sm:hidden"> in Any Online Video Content.
+                </p>
+                <div class="mt-8 flex flex-col sm:flex-row justify-center items-center sm:space-x-4 space-y-3 sm:space-y-0">
+                    <a href="#try" class="w-full sm:w-auto px-8 py-3 text-lg font-medium text-white bg-indigo-600 rounded-lg shadow-lg hover:bg-indigo-700 transition duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2" data-translate-key="hero_button_try">
+                        Try Papri Free
+                    </a>
+                    <a href="#demo" class="w-full sm:w-auto px-8 py-3 text-lg font-medium text-indigo-700 bg-white border-2 border-indigo-200 rounded-lg hover:bg-indigo-50 transition duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-2" data-translate-key="hero_button_demo">
+                        Watch Demo
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <section id="try" class="py-16 md:py-24 bg-white">
+            <div class="container mx-auto px-4">
+                <div class="max-w-3xl mx-auto text-center">
+                     <h2 class="text-3xl md:text-4xl font-bold text-slate-900" data-translate-key="try_title">Experience Papri Now</h2>
+                     <p class="mt-3 text-lg text-slate-600" data-translate-key="try_subtitle">Enter a link (e.g., YouTube, Vimeo) or upload a file/screenshot, tell us what you're looking for, and let our AI pinpoint the exact moment.</p>
+                     <p id="trial-counter" class="mt-4 text-sm font-medium text-indigo-600" data-translate-key="try_trial_counter" data-translate-plural-key="try_trial_counter_plural">You have 3 free searches remaining.</p>
+                     <div id="trial-limit-message" class="mt-4 text-sm hidden">
+                        <p class="font-medium text-red-600" data-translate-key="try_trial_limit">You've used all your free searches.</p>
+                        <a href="#pricing" class="underline hover:text-red-700" data-translate-key="try_trial_subscribe">Subscribe to continue searching!</a>
+                     </div>
+                </div>
+
+                <div id="search-interface" class="mt-8 max-w-4xl mx-auto">
+                     <div class="bg-slate-50 p-6 md:p-8 rounded-xl shadow-xl border border-slate-200">
+                         <form id="search-form" action="#" method="POST"> {# No actual POST here, JS handles it #}
+                             {% csrf_token %} {# Important if this form were to submit to Django directly #}
+                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                 <div>
+                                     <label for="video-url" class="block text-sm font-medium text-slate-700 mb-1.5" data-translate-key="try_label_source_url">Video URL (e.g., YouTube, Vimeo)</label>
+                                     <input type="url" id="video-url" name="video_url" placeholder="Paste video URL here..."
+                                        class="w-full px-4 py-2.5 border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm transition-colors duration-150"
+                                        aria-label="Video URL to search within">
+                                 </div>
+                                 <div>
+                                     <label for="video-upload" class="block text-sm font-medium text-slate-700 mb-1.5" data-translate-key="try_label_source_upload">Or Upload Screenshot/Image</label>
+                                     <input type="file" id="video-upload" name="video_file" accept="image/*" 
+                                        class="block w-full text-sm text-slate-500 border border-slate-300 rounded-lg cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                                               file:mr-4 file:py-2.5 file:px-4 file:border-0 file:text-sm file:font-medium
+                                               file:bg-slate-100 file:text-indigo-600 hover:file:bg-indigo-100 file:transition-colors file:duration-150"
+                                        aria-label="Upload an image or screenshot">
+                                     <p id="file-name-display" class="text-xs text-slate-600 mt-1 truncate" data-translate-key="try_file_selected_prefix" data-prefix-text="Selected: "></p>
+                                 </div>
+                             </div>
+                             <div class="mb-6">
+                                 <label for="search-query" class="block text-sm font-medium text-slate-700 mb-1.5" data-translate-key="try_label_query">What are you looking for in the video?</label>
+                                 <textarea id="search-query" name="query" rows="3" 
+                                    placeholder="Describe a scene, object, spoken words, or action..."
+                                    class="w-full px-4 py-2.5 border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm resize-y transition-colors duration-150"
+                                    aria-label="Describe your search query"></textarea>
+                             </div>
+                             <div class="text-center">
+                                 <button type="submit" id="search-submit-button" 
+                                    class="inline-flex items-center px-8 py-3 border border-transparent text-base font-medium rounded-lg shadow-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out transform hover:scale-105 disabled:opacity-60 disabled:hover:scale-100"
+                                    aria-label="Find Moment with Papri AI">
+                                     <i data-lucide="search-code" class="w-5 h-5 mr-2.5 -ml-1"></i>
+                                     <span data-translate-key="try_button_find">Find Moment</span>
+                                 </button>
+                             </div>
+                         </form>
+                     </div>
+
+                     <div id="search-results-area" class="mt-10 hidden">
+                         <h3 class="text-xl font-semibold text-center mb-6 text-slate-800">Example Results</h3>
+                         <div id="search-results-container" class="space-y-6">
+                             </div>
+                         <div id="search-in-progress" class="text-center py-8 hidden">
+                             <div class="inline-flex items-center text-lg text-indigo-600 animate-pulse">
+                                <span class="spinner mr-3"></span> Searching... Please wait.
+                             </div>
+                         </div>
+                         <div id="search-error" class="text-center py-8 hidden">
+                            <p class="text-lg text-red-600">Something went wrong. Please try again.</p>
+                         </div>
+                         <div id="no-results" class="text-center py-8 hidden">
+                            <p class="text-lg text-slate-600">No moments found matching your query in the demo.</p>
+                         </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="demo" class="py-16 md:py-24 bg-slate-50">
+            <div class="container mx-auto px-4 text-center">
+                 <h3 class="text-2xl md:text-3xl font-bold text-slate-900 mb-3" data-translate-key="demo_title">See Papri in Action</h3>
+                 <p class="text-lg text-slate-600 mb-8 max-w-2xl mx-auto" data-translate-key="demo_subtitle">Watch this short demo to understand how Papri's AI can revolutionize your video search experience.</p>
+                <div class="max-w-4xl mx-auto aspect-video rounded-xl overflow-hidden shadow-2xl border-4 border-white">
+                    
+                    <div style="padding:56.25% 0 0 0;position:relative;">
+                        <iframe src="https://player.vimeo.com/video/YOUR_VIMEO_DEMO_ID?badge=0&amp;autopause=0&amp;player_id=0&amp;app_id=YOUR_APP_ID" 
+                                frameborder="0" allow="autoplay; fullscreen; picture-in-picture; clipboard-write" 
+                                style="position:absolute;top:0;left:0;width:100%;height:100%;" 
+                                title="Papri Demo Video">
+                        </iframe>
+                    </div>
+                    <script src="https://player.vimeo.com/api/player.js"></script>
+                </div>
+            </div>
+        </section>
+
+        <section id="why-papri" class="py-16 md:py-24 bg-white">
+            <div class="container mx-auto px-4">
+                <div class="max-w-3xl mx-auto text-center mb-12">
+                    <h2 class="text-3xl md:text-4xl font-bold text-slate-900" data-translate-key="why_title">Tired of Aimlessly Scrubbing Videos?</h2>
+                    <p class="mt-3 text-lg text-slate-600" data-translate-key="why_subtitle">Papri's AI understands your favorite video content, letting you find exactly what you need, instantly.</p>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div class="feature-card">
+                        <div class="feature-icon-wrapper"><i data-lucide="zap" class="w-7 h-7"></i></div>
+                        <h3 class="feature-title" data-translate-key="why_feature1_title">Instant Pinpoint Accuracy</h3>
+                        <p class="feature-description" data-translate-key="why_feature1_desc">Describe what you're looking for and Papri takes you to the precise moment in seconds.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon-wrapper"><i data-lucide="search-slashes" class="w-7 h-7"></i></div>
+                        <h3 class="feature-title" data-translate-key="why_feature2_title">Search *Inside* Your Content</h3>
+                        <p class="feature-description" data-translate-key="why_feature2_desc">Our AI analyzes transcripts, visual elements, and context for truly relevant results.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon-wrapper"><i data-lucide="save-all" class="w-7 h-7"></i></div>
+                        <h3 class="feature-title" data-translate-key="why_feature3_title">Save Time & Boost Productivity</h3>
+                        <p class="feature-description" data-translate-key="why_feature3_desc">Reclaim hours. Perfect for creators, researchers, students, and video professionals.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="steps" class="py-16 md:py-24 bg-slate-50">
+            <div class="container mx-auto px-4">
+                <div class="text-center mb-12">
+                    <h2 class="text-3xl md:text-4xl font-bold text-slate-900" data-translate-key="steps_title">Get Started in 3 Simple Steps</h2>
+                </div>
+                <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
+                    <div class="step-card-landing">
+                        <div class="step-number-landing">1</div><i data-lucide="link-2" class="step-icon-landing"></i>
+                        <h3 class="step-title-landing" data-translate-key="steps_step1_title">Provide Content</h3>
+                        <p class="step-description-landing" data-translate-key="steps_step1_desc">Paste a link or upload your video/image.</p>
+                    </div>
+                    <div class="step-card-landing">
+                        <div class="step-number-landing">2</div><i data-lucide="type" class="step-icon-landing"></i>
+                        <h3 class="step-title-landing" data-translate-key="steps_step2_title">Describe Moment</h3>
+                        <p class="step-description-landing" data-translate-key="steps_step2_desc">Tell Papri what you're searching for.</p>
+                    </div>
+                    <div class="step-card-landing">
+                        <div class="step-number-landing">3</div><i data-lucide="locate-fixed" class="step-icon-landing"></i>
+                        <h3 class="step-title-landing" data-translate-key="steps_step3_title">Find Instantly</h3>
+                        <p class="step-description-landing" data-translate-key="steps_step3_desc">AI presents the exact matching segment.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="pricing" class="py-16 md:py-24 bg-gradient-to-b from-white to-indigo-50">
+            <div class="container mx-auto px-4">
+                <div class="max-w-3xl mx-auto text-center mb-12">
+                     <h2 class="text-3xl md:text-4xl font-bold text-slate-900" data-translate-key="pricing_title">Ready to Unlock Full Power?</h2>
+                     <p class="mt-3 text-lg text-slate-600" data-translate-key="pricing_subtitle">Go beyond the free trial and revolutionize how you interact with video content.</p>
+                 </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-1 gap-8 max-w-2xl mx-auto">
+                    <div class="bg-white rounded-xl shadow-2xl overflow-hidden border-2 border-indigo-500 p-8 flex flex-col">
+                        <div class="text-center">
+                            <span class="inline-block px-3 py-0.5 text-xs font-semibold tracking-wider text-indigo-100 uppercase bg-indigo-600 rounded-full" data-translate-key="pricing_plan_badge">Pro Plan</span>
+                            <h3 class="mt-3 text-2xl font-semibold text-slate-800" data-translate-key="pricing_plan_name">Papri Pro</h3>
+                            <p class="mt-1 text-slate-600" data-translate-key="pricing_plan_audience">For individuals and small teams.</p>
+                            <p class="mt-5">
+                                <span class="text-5xl font-extrabold text-slate-900 price-main" data-base-price-usd="6">$6</span>
+                                <span class="text-base font-medium text-slate-500 price-currency-suffix" data-translate-key="pricing_per_month">/ month</span>
+                            </p>
+                            <p id="converted-price-display" class="mt-1 text-sm text-slate-500" style="display:none;"></p>
+                            <p class="mt-1 text-xs text-slate-500" data-translate-key="pricing_billing_info">Billed monthly, cancel anytime.</p>
+                        </div>
+                        <ul class="mt-6 space-y-3 flex-grow text-sm text-slate-700">
+                            <li class="flex space-x-3"><i data-lucide="check-circle" class="flex-shrink-0 w-5 h-5 text-green-500"></i><span data-translate-key="pricing_feature_searches">Unlimited AI content searches</span></li>
+                            <li class="flex space-x-3"><i data-lucide="check-circle" class="flex-shrink-0 w-5 h-5 text-green-500"></i><span data-translate-key="pricing_feature_sources_full">YouTube, Vimeo, Dailymotion, PeerTube &amp; more</span></li>
+                            <li class="flex space-x-3"><i data-lucide="check-circle" class="flex-shrink-0 w-5 h-5 text-green-500"></i><span data_translate_key="pricing_feature_deep_analysis">Deep Transcript & Visual Analysis</span></li>
+                            <li class="flex space-x-3"><i data-lucide="check-circle" class="flex-shrink-0 w-5 h-5 text-green-500"></i><span data-translate-key="pricing_feature_timestamps">Timestamped segment results</span></li>
+                            <li class="flex space-x-3"><i data-lucide="check-circle" class="flex-shrink-0 w-5 h-5 text-green-500"></i><span data-translate-key="pricing_feature_segments">Download & Trim segments (Coming Soon)</span></li>
+                            <li class="flex space-x-3"><i data-lucide="check-circle" class="flex-shrink-0 w-5 h-5 text-green-500"></i><span data-translate-key="pricing_feature_support">Priority email support</span></li>
+                        </ul>
+                        <div class="mt-8">
+                             <a href="{% provider_login_url 'google' process='login' next='/app/' %}" class="w-full flex items-center justify-center px-6 py-3 border border-transparent rounded-lg shadow-md text-base font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-transform transform hover:scale-105" data-translate-key="pricing_cta_button">
+                                Get Started with Pro
+                            </a>
+                        </div>
+                         <p class="mt-6 text-center text-xs text-slate-500" data-translate-key="pricing_enterprise_prompt">Need enterprise features? <a href="mailto:sales@paprisearch.com" class="font-medium text-indigo-600 hover:underline" data-translate-key="pricing_contact_sales">Contact Sales</a></p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="faq" class="py-16 md:py-24 bg-slate-50">
+            <div class="container mx-auto px-4">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-slate-900 mb-10" data-translate-key="faq_title">Frequently Asked Questions</h2>
+                <div class="max-w-3xl mx-auto space-y-4">
+                    <details class="faq-item group">
+                        <summary class="faq-summary">
+                            <span data-translate-key="faq_q1_title">How accurate is the AI search?</span>
+                            <span class="accordion-icon">
+                                <i data-lucide="plus-circle" class="icon-open"></i><i data-lucide="minus-circle" class="icon-close hidden"></i>
+                            </span>
+                        </summary>
+                        <div class="faq-content" data-translate-key="faq_q1_desc">
+                            Papri uses state-of-the-art AI...
+                        </div>
+                    </details>
+                    <details class="faq-item group">
+                        <summary class="faq-summary">
+                            <span data-translate-key="faq_q2_title">What video formats and sources are supported?</span>
+                             <span class="accordion-icon"><i data-lucide="plus-circle" class="icon-open"></i><i data-lucide="minus-circle" class="icon-close hidden"></i></span>
+                         </summary>
+                         <div class="faq-content" data-translate-key="faq_q2_desc">Currently, Papri supports...</div>
+                    </details>
+                    </div>
+            </div>
+        </section>
+
+
+    </main>
+
+    <footer class="bg-slate-800 text-slate-400 py-12 px-4">
+          <div class="container mx-auto text-center text-sm">
+            <p data-translate-key="footer_text">&copy; <span id="currentYear">2025</span> Papri. Find your video moments, faster.</p>
+            <div class="mt-4 space-x-4 md:space-x-6">
+                <a href="/privacy-policy" class="footer-link" data-translate-key="footer_privacy">Privacy Policy</a>
+                <span class="text-slate-600">|</span>
+                <a href="/terms-of-service" class="footer-link" data-translate-key="footer_terms">Terms of Service</a>
+                <span class="text-slate-600 hidden sm:inline">|</span>
+                <a href="mailto:support@paprisearch.com" class="footer-link block mt-2 sm:mt-0 sm:inline" data-translate-key="footer_contact">Contact Us</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="{% static 'js/index.js' %}"></script> {# Was papri.js, renamed for clarity #}
+    <script>
+        // Ensure Lucide icons are rendered after initial page load and JS execution
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    </script>
+</body>
+</html>
