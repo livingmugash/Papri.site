@@ -1,1 +1,58 @@
+/* frontend/static/css/papriapp.css */
+body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
 
+/* Sidebar Customizations if needed */
+#sidebar .nav-item .nav-icon {
+    @apply transition-colors duration-150;
+}
+#sidebar .nav-item.active .nav-icon {
+    @apply text-indigo-600;
+}
+#sidebar .nav-item:not(.active):hover .nav-icon {
+    @apply text-slate-600;
+}
+
+/* Ensure result cards have a min-height or content looks okay when empty */
+.result-card {
+    min-height: 150px; /* Adjust as needed */
+}
+
+/* Spinner (if not using Lucide for everything) */
+.spinner {
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-left-color: #FFF; /* Or your theme color */
+    border-radius: 50%;
+    width: 1em; height: 1em;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+}
+/* For spinners within colored buttons, adjust border-left-color */
+button .spinner { border-left-color: currentColor; } /* Inherits button text color */
+.search-status-message .spinner { @apply border-slate-400 border-l-indigo-600; } /* Custom for status div */
+
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Tooltip styling (from your V4 example, slightly adapted) */
+#dynamic-tooltip {
+    /* Tailwind classes are applied in JS, these are fallbacks or base */
+    background-color: #1f2937; /* bg-slate-800 */
+    color: white;
+    padding: 0.25rem 0.5rem; /* px-2 py-1 */
+    border-radius: 0.25rem; /* rounded */
+    font-size: 0.75rem; /* text-xs */
+    font-weight: 500; /* font-medium */
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); /* shadow-lg */
+    z-index: 500;
+}
+
+/* Player wrapper styling */
+.video-player-wrapper {
+    position: relative; /* For potential absolute positioned elements inside like close button */
+}
