@@ -9,40 +9,16 @@ from ..items import PapriVideoItem
 
 logger = logging.getLogger(__name__)
 
-class PapriVideoItem(scrapy.Item):
-    original_url = scrapy.Field()
-    platform_name = scrapy.Field()
-    platform_video_id = scrapy.Field()
-    title = scrapy.Field()
-    description = scrapy.Field()
-    thumbnail_url = scrapy.Field()
-    publication_date_str = scrapy.Field() # String format from site
-    duration_str = scrapy.Field() # String format from site (e.g., "10:35")
-    uploader_name = scrapy.Field()
-    uploader_url = scrapy.Field()
-    tags = scrapy.Field() # list of strings
-    view_count_str = scrapy.Field()
-    like_count_str = scrapy.Field()
-    # For transcripts/captions
-    transcript_text = scrapy.Field()
-    transcript_vtt_url = scrapy.Field()
-    # Embed URL or direct video file URL
-    embed_url = scrapy.Field()
-    direct_video_url = scrapy.Field()
-
 class PeertubeSpider(scrapy.Spider):
     name = "peertube"
-    custom_settings = {
-        'DOWNLOAD_DELAY': 2, # Increased default delay
-        'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
+    custom_settings = { # Overrides from scrapers/settings.py 
+        'DOWNLOAD_DELAY': 2.0,
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 2, # Be respectful
         'AUTOTHROTTLE_ENABLED': True,
-        'AUTOTHROTTLE_START_DELAY': 1,
-        'AUTOTHROTTLE_MAX_DELAY': 30,
         'AUTOTHROTTLE_TARGET_CONCURRENCY': 1.0,
-        'USER_AGENT': 'PapriSearchBot/1.0 (+https://www.yourpaprisite.com/botinfo.html)' # CHANGE THIS URL
     }
 
-     def __init__(self, start_url=None, target_domain=None, search_query=None, max_items_to_scrape=10, *args, **kwargs):
+    def __init__(self, start_url=None, target_domain=None, search_query=None, max_items_to_scrape=10, *args, **kwargs):
         super(PeertubeSpider, self).__init__(*args, **kwargs)
         self.search_query = search_query
         self.max_items = int(max_items_to_scrape)
@@ -56,69 +32,57 @@ class PeertubeSpider(scrapy.Spider):
             logger.error("PeertubeSpider: Critical - No start_url provided!")
             self.start_urls = []
 
-    def parse_ld_json_data(self, response):
-        # ... (Implementation from Step 36 - unchanged) ...
+    def parse_ld_json_data(self, response): # 
         ld_json_scripts = response.xpath('//script[@type="application/ld+json"]/text()').getall()
         for script_content in ld_json_scripts:
             try:
                 data = json.loads(script_content)
-                if isinstance(data, list): data = next((item for item in data if isinstance(item, dict) and item.get('@type') in ['VideoObject', 'Clip', 'TVEpisode']), None)
-                if isinstance(data, dict) and data.get('@type') in ['VideoObject', 'Clip', 'TVEpisode']: return data
-            except: pass
-        return None
+                # PeerTube often has VideoObject in the main object or within a list (e.g., ItemList)
+                if isinstance(data, list): 
+                    data = next((item for item in data if isinstance(item, dict) and item.get('@type') in ['VideoObject', 'Clip', 'TVEpisode']), None)
+                if isinstance(data, dict) and data.get('@type') in ['VideoObject', 'Clip', 'TVEpisode']:
+                    logger.debug(f"LD+JSON VideoObject found on {response.url}")
+                    return data
+            except Exception: pass # Ignore parsing errors for individual scripts
+        return {} # Return empty dict if not found
 
-    def parse(self, response):
-        if not self.start_urls: return
+    def parse(self, response): # For listing pages 
+        if not self.start_urls or self.scraped_item_count >= self.max_items: return
         logger.info(f"PeertubeSpider: Parsing listing: {response.url}. Scraped: {self.scraped_item_count}/{self.max_items}")
 
-        # === YOU MUST REPLACE THESE SELECTORS WITH ACTUAL ONES FOR YOUR TARGET PEERTUBE INSTANCE ===
-        # Example (these are common but WILL vary by theme):
-        video_miniature_selectors = [
-            'div.videos-list-results-videos div.video-miniature', 
-            'div.video-miniature-container',
-            'figure.video-miniature',
-            'div.video-block', 
-            'article.video-card',
-            'div.videos-grid-item'
-        ]
-        miniatures = []
-        for sel in video_miniature_selectors:
-            miniatures = response.css(sel)
-            if miniatures: break
+        # === [YOU] YOUR_SELECTOR_HERE for video links on listing pages ===
+        # Example: based on common PeerTube themes; these are highly variable
+        # Use multiple selectors as fallbacks.
+        # PDF implies data like `name`, `thumbnailPath`, `channel.displayName` is available. 
+        video_links = response.css('YOUR_SELECTOR_FOR_VIDEO_LINK_IN_LISTING_ITEM::attr(href)').getall()
+        # if not video_links: video_links = response.xpath('YOUR_XPATH_SELECTOR_FOR_VIDEO_LINK::attr(href)').getall()
         
-        if not miniatures: logger.warning(f"No video miniatures found on {response.url} with current selectors.")
-
-        for miniature in miniatures:
+        logger.debug(f"Found {len(video_links)} potential video links on {response.url}")
+        for href in video_links:
             if self.scraped_item_count >= self.max_items:
                 logger.info(f"Max items ({self.max_items}) reached from listing. Stopping."); return
+            full_video_url = response.urljoin(href)
+            if '/w/' in full_video_url or '/videos/watch/' in full_video_url: # PeerTube patterns
+                yield scrapy.Request(full_video_url, callback=self.parse_video_page)
+        
+        # === [YOU] YOUR_SELECTOR_HERE for pagination ===
+        # next_page = response.css('YOUR_SELECTOR_FOR_NEXT_PAGE_LINK::attr(href)').get()
+        # if next_page and self.scraped_item_count < self.max_items:
+        #     yield response.follow(next_page, callback=self.parse)
 
-            # Example: get link from first `a` tag with an href within the miniature
-            relative_video_url = miniature.css('a[href]::attr(href)').get()
-            
-            if relative_video_url:
-                full_video_url = response.urljoin(relative_video_url)
-                if '/w/' in full_video_url or '/videos/watch/' in full_video_url or '/videos/embed/' in full_video_url: # Basic sanity check
-                    yield scrapy.Request(full_video_url, callback=self.parse_video_page, meta={'dont_redirect': True, 'handle_httpstatus_list': [301, 302, 307, 308]})
-
-        # === PAGINATION (HIGHLY SITE-SPECIFIC - EXAMPLE) ===
-        next_page = response.css('YOUR_SELECTOR_FOR_NEXT_PAGE_LINK::attr(href)').get()
-         if next_page and self.scraped_item_count < self.max_items:
-            yield response.follow(next_page, callback=self.parse)
-
-    def parse_video_page(self, response):
-        if self.scraped_item_count >= self.max_items:
-            logger.info(f"Max items reached. Skipping video page: {response.url}"); return
-
+    def parse_video_page(self, response): # 
+        if self.scraped_item_count >= self.max_items: return
         logger.info(f"PeertubeSpider: Parsing video page: {response.url}")
-        ld_data = self.parse_ld_json_data(response) or {} # Ensure ld_data is a dict
+        
+        ld_data = self.parse_ld_json_data(response)
+        loader = ItemLoader(item=PapriVideoItem(), response=response) # 
 
-        loader = ItemLoader(item=PapriVideoItem(), response=response)
         loader.add_value('original_url', response.url)
         loader.add_value('instance_url', f"{response.urlparts.scheme}://{response.urlparts.netloc}")
         loader.add_value('platform_name', f'PeerTube_{response.urlparts.netloc}')
 
-        # Video ID (Robust extraction) - from Step 36
-        # ... (video_id extraction logic using re.search on response.urlparts.path or ld_data) ...
+        # Video ID - from PDF: Video.uuid (usually part of URL) 
+        # ... (video_id extraction logic from Step 36 is good) ...
         url_path = response.urlparts.path; video_id = None
         match_uuid = re.search(r'/(?:videos/watch/|videos/embed/|w/)(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', url_path)
         if match_uuid: video_id = match_uuid.group('id')
@@ -127,60 +91,76 @@ class PeertubeSpider(scrapy.Spider):
             if match_short_id: video_id = match_short_id.group('id')
         if not video_id: video_id = ld_data.get('identifier') or response.xpath('//meta[@itemprop="identifier"]/@content').get()
         loader.add_value('platform_video_id', video_id)
+
+        # === [YOU] ADD/VERIFY YOUR SELECTORS FOR EACH FIELD BELOW ===
+        # Prioritize LD+JSON, then meta tags, then specific CSS/XPath from page structure.
+        # Fields based on your PDF (Table 1: PeerTube Data Attributes vs. PapriVideoltem Fields) 
+        # and Section 4 (Detailed Analysis) 
+
+        loader.add_value('title', ld_data.get('name') or response.xpath('//meta[@property="og:title"]/@content').get() or response.css('YOUR_SELECTOR_FOR_H1_TITLE::text').get())
+        loader.add_value('description', ld_data.get('description') or response.xpath('//meta[@property="og:description"]/@content').get() or response.css('YOUR_SELECTOR_FOR_DESCRIPTION ::text').getall())
+        loader.add_value('thumbnail_url', ld_data.get('thumbnailUrl') or response.xpath('//meta[@property="og:image"]/@content').get() or response.css('YOUR_SELECTOR_FOR_VIDEO_THUMBNAIL_IMG::attr(src)').get())
         
-        # --- REPLACE WITH YOUR ACTUAL SELECTORS based on your PDF and site inspection ---
-        loader.add_value('title', ld_data.get('name') or response.xpath('YOUR_SELECTOR_FOR_OG_TITLE/@content').get() or response.css('YOUR_SELECTOR_FOR_H1_TITLE::text').get())
-        loader.add_value('description', ld_data.get('description') or response.xpath('YOUR_SELECTOR_FOR_OG_DESCRIPTION/@content').get() or response.css('YOUR_SELECTOR_FOR_DESCRIPTION ::text').getall())
-        loader.add_value('thumbnail_url', ld_data.get('thumbnailUrl') or response.xpath('YOUR_SELECTOR_FOR_OG_IMAGE/@content').get())
-        
-        pub_date = ld_data.get('uploadDate') or ld_data.get('datePublished') or response.xpath('YOUR_SELECTOR_FOR_UPLOAD_DATE_META/@content').get() or response.css('YOUR_SELECTOR_FOR_DATE_DISPLAY::attr(datetime)').get() or response.css('YOUR_SELECTOR_FOR_DATE_DISPLAY::text').get()
+        pub_date = ld_data.get('uploadDate') or ld_data.get('datePublished') or response.xpath('//meta[@itemprop="uploadDate"]/@content').get() or response.css('YOUR_SELECTOR_FOR_PUBLICATION_DATE::attr(datetime)').get() or response.css('YOUR_SELECTOR_FOR_PUBLICATION_DATE_TEXT::text').get()
         loader.add_value('publication_date_str', pub_date)
         
-        duration = ld_data.get('duration') or response.xpath('YOUR_SELECTOR_FOR_DURATION_META/@content').get() # Expect ISO 8601 like PT10M3S
+        duration = ld_data.get('duration') or response.xpath('//meta[@itemprop="duration"]/@content').get() # Expect ISO 8601 PTxMxS
         loader.add_value('duration_str', duration)
 
-        uploader_ld = ld_data.get('author') or ld_data.get('channel')
+        uploader_ld = ld_data.get('author') or ld_data.get('channel') # 
         if isinstance(uploader_ld, dict):
             loader.add_value('uploader_name', uploader_ld.get('name'))
-            loader.add_value('uploader_url', uploader_ld.get('url') or uploader_ld.get('@id'))
+            loader.add_value('uploader_url', response.urljoin(uploader_ld.get('url') or uploader_ld.get('@id','')))
         else:
-            loader.add_css('uploader_name', 'YOUR_SELECTOR_FOR_UPLOADER_NAME::text')
-            loader.add_css('uploader_url', 'YOUR_SELECTOR_FOR_UPLOADER_LINK::attr(href)')
+            loader.add_css('uploader_name', 'YOUR_SELECTOR_FOR_UPLOADER_NAME_TEXT::text')
+            loader.add_css('uploader_url', 'YOUR_SELECTOR_FOR_UPLOADER_PROFILE_LINK::attr(href)')
 
-        tags_ld = ld_data.get('keywords') # Often comma-separated string or list
+        tags_ld = ld_data.get('keywords'); tags_page = response.css('YOUR_SELECTOR_FOR_TAGS_LIST a::text').getall()
         if isinstance(tags_ld, str): tags_ld = [t.strip() for t in tags_ld.split(',')]
-        loader.add_value('tags', tags_ld or response.css('YOUR_SELECTOR_FOR_TAGS a::text').getall())
+        loader.add_value('tags', tags_ld or tags_page) # 
         
-        views = ld_data.get('interactionStatistic', {}).get('userInteractionCount') or response.xpath('YOUR_SELECTOR_FOR_VIEWS_META/@content').get() or response.css('YOUR_SELECTOR_FOR_VIEWS_DISPLAY::text').re_first(r'(\d[\d,\.]*)')
-        loader.add_value('view_count_str', views)
-        loader.add_css('like_count_str', 'YOUR_SELECTOR_FOR_LIKES_DISPLAY::text') # Often dynamic
-        # dislike_count_str - similar to likes, often dynamic
+        views = ld_data.get('interactionStatistic', {}).get('userInteractionCount') or response.xpath('//meta[@itemprop="interactionCount"]/@content').get() or response.css('YOUR_SELECTOR_FOR_VIEWS_TEXT::text').re_first(r'(\d[\d,\.]*)')
+        loader.add_value('view_count_str', views) # 
+        loader.add_css('like_count_str', 'YOUR_SELECTOR_FOR_LIKES_TEXT::text') # 
+        # loader.add_css('dislike_count_str', 'YOUR_SELECTOR_FOR_DISLIKES_TEXT::text') # 
 
-        loader.add_value('language_code_video', ld_data.get('inLanguage') or response.xpath('//meta[@itemprop="inLanguage"]/@content').get())
-        loader.add_value('licence_str', ld_data.get('license') or response.css('YOUR_SELECTOR_FOR_LICENSE_LINK::text').get()) # URL or text
-        loader.add_value('category_str', ld_data.get('genre')) # Often 'genre' in ld+json
-        # privacy_str - usually not publicly displayed directly, might be inferred or from API
+        loader.add_value('language_code_video', ld_data.get('inLanguage') or response.xpath('//meta[@itemprop="inLanguage"]/@content').get()) # 
+        loader.add_value('licence_str', ld_data.get('license') or response.css('YOUR_SELECTOR_FOR_LICENSE_TEXT_OR_LINK_TEXT::text').get()) # 
+        loader.add_value('category_str', ld_data.get('genre') or response.css('YOUR_SELECTOR_FOR_CATEGORY_TEXT::text').get()) # 
+        loader.add_value('privacy_str', ld_data.get('isAccessibleForFree') == False and 'private' or ld_data.get('isAccessibleForFree') and 'public') # Infer from ld+json; direct privacy often not on page 
 
-        # VTT URL
-        vtt_url_en = response.xpath('//video//track[@kind="captions" and (@srclang="en" or starts-with(@srclang, "en-"))][1]/@src').get()
-        vtt_lang_en = "en" if vtt_url_en else None
-        vtt_url_any = response.xpath('//video//track[@kind="captions"][1]/@src').get()
-        vtt_lang_any = response.xpath('//video//track[@kind="captions"][1]/@srclang').get() if vtt_url_any else None
+        # Transcript/Caption VTT URL & Language 
+        vtt_tracks = response.xpath('//video//track[@kind="captions"]')
+        # Prioritize English, then first available
+        chosen_vtt_url, chosen_vtt_lang = None, 'und'
+        for track in vtt_tracks:
+            src = track.xpath('./@src').get()
+            srclang = track.xpath('./@srclang').get()
+            if src:
+                if not chosen_vtt_url: # Take first one
+                    chosen_vtt_url = response.urljoin(src)
+                    if srclang: chosen_vtt_lang = srclang
+                if srclang and ('en' in srclang.lower()): # Prioritize English
+                    chosen_vtt_url = response.urljoin(src)
+                    chosen_vtt_lang = srclang
+                    break 
+        if chosen_vtt_url:
+            loader.add_value('transcript_vtt_url', chosen_vtt_url)
+            loader.add_value('language_code_caption', chosen_vtt_lang)
         
-        final_vtt_url = vtt_url_en or vtt_url_any
-        final_vtt_lang = vtt_lang_en or vtt_lang_any or 'und'
-        if final_vtt_url:
-            loader.add_value('transcript_vtt_url', response.urljoin(final_vtt_url))
-            loader.add_value('language_code_caption', final_vtt_lang)
+        loader.add_value('embed_url', ld_data.get('embedUrl') or response.xpath('//meta[@itemprop="embedURL"]/@content').get()) # 
+        loader.add_value('direct_video_url', ld_data.get('contentUrl') or response.xpath('//video/source[@type="video/mp4"][1]/@src').get() or response.xpath('//video[@src]/@src').get()) # 
         
-        loader.add_value('embed_url', ld_data.get('embedUrl') or response.xpath('//meta[@itemprop="embedURL"]/@content').get())
-        loader.add_value('direct_video_url', ld_data.get('contentUrl') or response.xpath('//video/source[@type="video/mp4"][1]/@src').get() or response.xpath('//video[@src]/@src').get())
-        
-        loader.add_value('ld_json_data', json.dumps(ld_data) if ld_data else None)
+        # Store first ld+json block if it exists
+        ld_json_content = response.xpath('//script[@type="application/ld+json"]/text()').get()
+        if ld_json_content:
+            try: loader.add_value('ld_json_data', json.dumps(json.loads(ld_json_content))) # Store as string
+            except: pass
+
 
         item = loader.load_item()
         if item.get('title') and item.get('original_url') and item.get('platform_video_id'):
             self.scraped_item_count += 1
             yield item
         else:
-            logger.warning(f"Spider: Essential data missing for {response.url}. Title: {item.get('title')}, PlatformID: {item.get('platform_video_id')}. Item not yielded.")
+            logger.warning(f"PeertubeSpider: Essential data missing for {response.url}. Title:'{item.get('title')}', ID:'{item.get('platform_video_id')}'. Item NOT yielded.")
