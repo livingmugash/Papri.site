@@ -1,1 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Papri - AI Video Search</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
 
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+    <script src="https://unpkg.com/lucide-react@0.395.0/dist/umd/lucide.min.js"></script>
+    <link rel="stylesheet" href="{% static 'css/papriapp.css' %}">
+
+    <script>
+        // Pass CSRF token to JavaScript, and User info if available
+        const CSRF_TOKEN = "{{ csrf_token }}";
+        const USER_IS_AUTHENTICATED = {{ request.user.is_authenticated|yesno:"true,false" }};
+        const USER_EMAIL = USER_IS_AUTHENTICATED ? "{{ request.user.email|escapejs }}" : null;
+        const USER_FIRST_NAME = USER_IS_AUTHENTICATED ? "{{ request.user.first_name|escapejs }}" : null;
+        const USER_LAST_NAME = USER_IS_AUTHENTICATED ? "{{ request.user.last_name|escapejs }}" : null;
+    </script>
+</head>
+<body class="bg-slate-100 font-poppins antialiased text-slate-800">
+
+    <div class="flex h-screen overflow-hidden">
+        <aside id="sidebar"
+            class="fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-slate-200 transform -translate-x-full transition-transform duration-300 ease-in-out md:relative md:translate-x-0 md:flex md:flex-col md:flex-shrink-0">
+            <div class="h-16 flex items-center justify-center px-4 border-b border-slate-200 flex-shrink-0">
+                <a href="#search" class="flex items-center space-x-1 text-2xl font-bold text-indigo-600 app-link">
+                    <span>P</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                        class="lucide lucide-play transform scale-x-[-1] rotate-[-90deg] w-5 h-5 inline-block">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    <span>pri</span>
+                </a>
+            </div>
+
+            <nav class="flex-grow overflow-y-auto py-4 space-y-1">
+                <a href="#search" class="nav-item active" data-target="search-view" aria-label="Search Videos">
+                    <i data-lucide="search" class="nav-icon"></i>
+                    <span>Search</span>
+                </a>
+                <a href="#history" class="nav-item" data-target="history-view" aria-label="Search History">
+                    <i data-lucide="history" class="nav-icon"></i>
+                    <span>History</span>
+                </a>
+                <a href="#collections" class="nav-item" data-target="collections-view" aria-label="My Collections">
+                    <i data-lucide="folder-kanban" class="nav-icon"></i>
+                    <span>Collections</span>
+                </a>
+                <a href="#settings" class="nav-item" data-target="settings-view" aria-label="Account Settings">
+                    <i data-lucide="settings" class="nav-icon"></i>
+                    <span>Settings</span>
+                </a>
+            </nav>
+
+            <div class="p-4 border-t border-slate-200 flex-shrink-0">
+                <div class="flex items-center space-x-3">
+                    <span class="user-avatar inline-flex items-center justify-center h-9 w-9 rounded-full bg-indigo-100 text-indigo-700 font-medium">
+                        <span class="user-initial">U</span>
+                        <img id="user-profile-pic" src="" alt="User Avatar" class="rounded-full h-9 w-9 hidden">
+                    </span>
+                    <div>
+                        <p class="user-name text-sm font-medium text-slate-700">User Name</p>
+                        <p class="user-email text-xs text-slate-500 truncate">user@example.com</p>
+                    </div>
+                </div>
+                 <button id="logout-button"
+                    class="mt-3 w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-red-500"
+                    aria-label="Log out">
+                    <i data-lucide="log-out" class="w-4 h-4 mr-2"></i>
+                    Logout
+                </button>
+            </div>
+        </aside>
+
+        <div id="sidebar-backdrop" class="fixed inset-0 bg-black bg-opacity-50 z-20 hidden md:hidden"
+            aria-hidden="true"></div>
+
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <header
+                class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:hidden flex-shrink-0">
+                <button id="hamburger-menu" class="p-2 text-slate-500 hover:text-indigo-600"
+                    aria-label="Open navigation menu">
+                    <i data-lucide="menu" class="w-6 h-6"></i>
+                </button>
+                <a href="#search" class="flex items-center space-x-1 text-xl font-bold text-indigo-600 app-link">
+                    <span>P</span><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="lucide lucide-play transform scale-x-[-1] rotate-[-90deg] w-4 h-4 inline-block">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg><span>pri</span>
+                </a>
+                <div class="w-6"></div> </header>
+
+            <main class="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
+                <div id="view-container">
+
+                    <section id="search-view" class="app-view">
+                        <h1 class="text-xl sm:text-2xl md:text-3xl font-semibold text-slate-800 mb-4 sm:mb-6">
+                            Papri AI Video Search
+                        </h1>
+
+                        <form id="papri-search-form" class="bg-white p-4 sm:p-6 rounded-lg shadow border border-slate-200 mb-6 sm:mb-8">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label for="search-query-input" class="block text-sm font-medium text-slate-700 mb-1">
+                                        Describe what you're looking for (text or concepts)
+                                    </label>
+                                    <textarea id="search-query-input" name="query_text" rows="3"
+                                        placeholder="e.g., 'cat fails to jump', 'tutorial on django models', 'scene with a red car chase'"
+                                        class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm resize-y"
+                                        aria-label="Describe the content you are searching for"></textarea>
+                                </div>
+                                <div>
+                                    <label for="search-image-input" class="block text-sm font-medium text-slate-700 mb-1">
+                                        Or search by image (upload screenshot)
+                                    </label>
+                                    <input type="file" id="search-image-input" name="query_image" accept="image/*"
+                                        class="block w-full text-sm text-slate-500 border border-slate-300 rounded-md cursor-pointer
+                                               file:mr-4 file:py-2 file:px-4
+                                               file:rounded-l-md file:border-0
+                                               file:text-sm file:font-semibold
+                                               file:bg-indigo-50 file:text-indigo-700
+                                               hover:file:bg-indigo-100"
+                                        aria-label="Upload a screenshot to search by image">
+                                    <p id="search-image-filename" class="text-xs text-slate-500 mt-1"></p>
+                                </div>
+                            </div>
+                             <div class="mb-4">
+                                <label for="search-source-url" class="block text-sm font-medium text-slate-700 mb-1">
+                                    Search within a specific video URL (Optional)
+                                </label>
+                                <input type="url" id="search-source-url" name="video_url" placeholder="e.g., https://www.youtube.com/watch?v=..."
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                                    aria-label="Video URL to search within">
+                            </div>
+
+                            <div class="flex items-center justify-end gap-3">
+                                <button type="submit" id="start-search-button"
+                                    class="inline-flex items-center justify-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-60"
+                                    aria-label="Start AI Search">
+                                    <i data-lucide="search-code" class="w-5 h-5 mr-2"></i>
+                                    <span>Find with Papri AI</span>
+                                </button>
+                            </div>
+                        </form>
+
+                        <div id="search-filters-container" class="mb-6 p-4 bg-white rounded-lg shadow border border-slate-200 hidden">
+                            <h3 class="text-md font-semibold text-slate-700 mb-3">Filters</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div>
+                                    <label for="filter-platform" class="block text-xs font-medium text-slate-600">Platform</label>
+                                    <select id="filter-platform" class="filter-input mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm">
+                                        <option value="">All Platforms</option>
+                                        <option value="YouTube">YouTube</option>
+                                        <option value="Vimeo">Vimeo</option>
+                                        <option value="Dailymotion">Dailymotion</option>
+                                        <option value="PeerTube_tilvids.com">PeerTube (Tilvids)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="filter-duration" class="block text-xs font-medium text-slate-600">Duration</label>
+                                    <select id="filter-duration" class="filter-input mt-1 block w-full rounded-md text-sm">
+                                        <option value="">Any Duration</option>
+                                        <option value="short">Short (< 5 min)</option> 
+                                        <option value="medium">Medium (5-20 min)</option>
+                                        <option value="long">Long (> 20 min)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label for="filter-date-after" class="block text-xs font-medium text-slate-600">Uploaded After</label>
+                                    <input type="date" id="filter-date-after" class="filter-input mt-1 block w-full rounded-md text-sm">
+                                </div>
+                                <div>
+                                    <label for="filter-sort-by" class="block text-xs font-medium text-slate-600">Sort By</label>
+                                    <select id="filter-sort-by" class="filter-input mt-1 block w-full rounded-md text-sm">
+                                        <option value="relevance">Relevance</option>
+                                        <option value="date_desc">Newest First</option>
+                                        <option value="date_asc">Oldest First</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mt-4 text-right">
+                                <button id="apply-filters-button" class="px-4 py-1.5 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-md">Apply Filters</button>
+                                <button id="clear-filters-button" class="px-4 py-1.5 text-sm text-slate-600 hover:bg-slate-100 rounded-md ml-2">Clear</button>
+                            </div>
+                        </div>
+                        <button id="toggle-filters-button" class="mb-6 text-sm text-indigo-600 hover:underline">
+                            <i data-lucide="filter" class="inline-block w-4 h-4 mr-1"></i> Show Filters
+                        </button>
+
+
+                        <div id="search-results-section">
+                            <div id="search-status" class="mb-4 p-3 text-center rounded-md hidden">
+                                </div>
+                            <div id="search-results-container" class="space-y-6 sm:space-y-8">
+                                <p class="text-center text-slate-500 italic py-8">
+                                    Use the search bar above to find videos with Papri AI.
+                                </p>
+                            </div>
+                            <div id="pagination-controls" class="mt-8 flex justify-center items-center space-x-2 hidden">
+                                </div>
+                        </div>
+                    </section>
+
+                    <section id="history-view" class="app-view hidden">
+                        <h1 class="text-xl sm:text-2xl md:text-3xl font-semibold text-slate-800 mb-6">Search History</h1>
+                        <div class="bg-white p-4 sm:p-6 rounded-lg shadow border border-slate-200">
+                            <p class="text-center text-slate-500 italic">Search history feature coming soon.</p>
+                        </div>
+                    </section>
+
+                    <section id="collections-view" class="app-view hidden">
+                        <h1 class="text-xl sm:text-2xl md:text-3xl font-semibold text-slate-800 mb-6">My Collections</h1>
+                        <div class="bg-white p-4 sm:p-6 rounded-lg shadow border border-slate-200">
+                            <p class="text-center text-slate-500 italic">Video collections feature coming soon.</p>
+                        </div>
+                    </section>
+
+
+                    <section id="settings-view" class="app-view hidden">
+                        <h1 class="text-xl sm:text-2xl md:text-3xl font-semibold text-slate-800 mb-6">Settings</h1>
+                        <div class="space-y-6 sm:space-y-8 max-w-3xl">
+                            <div class="bg-white p-4 sm:p-6 rounded-lg shadow border border-slate-200">
+                                <h2 class="text-base sm:text-lg font-semibold text-slate-700 mb-4">Profile</h2>
+                                <div class="space-y-3 text-sm">
+                                    <p>Name: <span class="font-medium text-slate-900 user-name-settings">User Name</span></p>
+                                    <p>Email: <span class="font-medium text-slate-900 user-email-settings">user@example.com</span></p>
+                                    <button class="text-indigo-600 hover:underline text-xs">Change Password (coming soon)</button>
+                                </div>
+                            </div>
+                            <div class="bg-white p-4 sm:p-6 rounded-lg shadow border border-slate-200">
+                                 <h2 class="text-base sm:text-lg font-semibold text-slate-700 mb-4">Subscription (Demo)</h2>
+                                 <div class="space-y-3 text-sm mb-4">
+                                    <p>Plan: <span class="font-medium text-green-600">Papri Pro</span></p>
+                                    <p>Status: <span class="font-medium text-green-600">Active</span></p>
+                                    <p>Renews on: <span id="subscription-next-billing-settings">May 26, 2026</span></p>
+                                    <a href="#" class="text-indigo-600 hover:underline text-xs block">Manage Billing (coming soon)</a>
+                                </div>
+                            </div>
+                            </div>
+                    </section>
+
+                </div> </main>
+        </div> </div> <div id="dynamic-tooltip" class="fixed z-[9999] px-2 py-1 bg-slate-900 text-white text-xs font-medium rounded shadow-lg opacity-0 transition-opacity duration-150 ease-in-out pointer-events-none whitespace-nowrap hidden" role="tooltip"></div>
+
+    <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+    <script src="{% static 'js/papriapp.js' %}"></script>
+    <script>
+        // Initialize Lucide icons after DOM is ready and JS loads
+        lucide.createIcons();
+    </script>
+</body>
+</html>
