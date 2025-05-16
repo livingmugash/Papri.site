@@ -1,25 +1,60 @@
 // frontend/static/js/papriapp.js
 
+// Ensure global constants from papriapp.html are accessible
+// const CSRF_TOKEN, USER_IS_AUTHENTICATED, USER_EMAIL, USER_FIRST_NAME, USER_LAST_NAME;
+
 document.addEventListener('DOMContentLoaded', () => {
     // --- DOM Element References ---
     const viewContainer = document.getElementById('view-container');
-    const searchForm = document.getElementById('papri-search-form'); // **NEW: Assume your search form has this ID**
-    const searchQueryInput = document.getElementById('search-query-input');
-    const searchImageInput = document.getElementById('search-image-input'); // **NEW: Assume your image input has this ID**
-    const searchSourceUrlInput = document.getElementById('search-source-url'); // From your HTML
-    
-    const searchStatusDiv = document.getElementById('search-status');
-    const searchResultsContainer = document.getElementById('search-results-container');
-    
     const sidebar = document.getElementById('sidebar');
     const sidebarBackdrop = document.getElementById('sidebar-backdrop');
     const hamburgerMenuButton = document.getElementById('hamburger-menu');
     const dynamicTooltip = document.getElementById('dynamic-tooltip');
 
-    let activePlyrInstance = null;
+    // Search View Elements
+    const searchForm = document.getElementById('papri-search-form');
+    const searchQueryInput = document.getElementById('search-query-input');
+    const searchImageInput = document.getElementById('search-image-input');
+    const searchImageFilename = document.getElementById('search-image-filename');
+    const searchSourceUrlInput = document.getElementById('search-source-url'); // Optional
+    const startSearchButton = document.getElementById('start-search-button');
+    const searchStatusDiv = document.getElementById('search-status');
+    const searchResultsContainer = document.getElementById('search-results-container');
+    const paginationControls = document.getElementById('pagination-controls');
+    
+    // Filter Elements
+    const toggleFiltersButton = document.getElementById('toggle-filters-button');
+    const searchFiltersContainer = document.getElementById('search-filters-container');
+    const filterPlatformSelect = document.getElementById('filter-platform');
+    const filterDurationSelect = document.getElementById('filter-duration');
+    const filterDateAfterInput = document.getElementById('filter-date-after');
+    const filterSortBySelect = document.getElementById('filter-sort-by');
+    const applyFiltersButton = document.getElementById('apply-filters-button');
+    const clearFiltersButton = document.getElementById('clear-filters-button');
+
+
+    // User Profile Elements in Sidebar
+    const userAvatarInitial = document.querySelector('#sidebar .user-initial');
+    const userNameSidebar = document.querySelector('#sidebar .user-name');
+    const userEmailSidebar = document.querySelector('#sidebar .user-email');
+    const logoutButton = document.getElementById('logout-button');
+
+    // Settings View Profile Elements
+    const userNameSettings = document.querySelector('#settings-view .user-name-settings');
+    const userEmailSettings = document.querySelector('#settings-view .user-email-settings');
+
+
+    let activePlyrInstance = null; // For video previews later
     let tooltipTimeout = null;
     let currentSearchTaskId = null;
     let pollingInterval = null;
+    let currentPage = 1;
+    let currentFilters = {}; // To store applied filter values
+    let currentSortBy = "relevance";
+    let currentNextPageUrl = null;
+    let currentPreviousPageUrl = null;
+    let totalResultsCount = 0;
+
 
     // --- CSRF Token Helper ---
     function getCookie(name) {
@@ -36,587 +71,594 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         return cookieValue;
     }
-    const csrftoken = getCookie('csrftoken');
+    // const csrftoken = getCookie('csrftoken'); // CSRF_TOKEN is now globally available from HTML script tag
 
-    // --- Initial Setup ---
-    initLucideIcons();
-    setupNavigationAndTooltips();
-    setupSearchForm(); // **MODIFIED**
-    setupReferralCopy(); // Keep if functionality is present
-    setupSettingsActions(); // Keep if functionality is present
-    setupLogout(); // Keep or adapt for Django logout
-    updateUserInfoPlaceholders(); // Adapt to fetch user info if needed
+    // --- Initialization ---
+    function initializeApp() {
+        if (!USER_IS_AUTHENTICATED) {
+            // If Django serves this page, @login_required should prevent this.
+            // If it's a static SPA and user is not auth'd, redirect to Django's login.
+            // Django's allauth will redirect to /app/ after login if LOGIN_REDIRECT_URL is set.
+            window.location.href = "/accounts/google/login/?process=login&next=/app/"; // Adjust 'next' as needed
+            return;
+        }
+        initLucideIcons();
+        setupNavigation();
+        setupUserProfile();
+        setupSearchForm();
+        setupFilterControls();
+        setupLogout();
+        // Handle initial hash for view switching
+        const initialHash = window.location.hash || '#search';
+        switchView(initialHash.substring(1) + '-view', true);
+        window.addEventListener('hashchange', () => {
+            const hash = window.location.hash || '#search';
+            switchView(hash.substring(1) + '-view', true);
+        });
+        logger("Papri App Initialized");
+    }
 
-    // --- Initialization Functions ---
+    function logger(message, type = 'log') {
+        console[type](`[PapriApp] ${message}`);
+    }
+
     function initLucideIcons() {
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         } else {
-            console.warn('Lucide icons library not found.');
+            logger('Lucide icons library not found.', 'warn');
         }
     }
 
-    function setupNavigationAndTooltips() {
-        // ... (Your existing navigation and tooltip logic from papriapp.js) ...
-        // Ensure switchView correctly handles showing/hiding views.
-        const initialHash = window.location.hash || '#search';
-        const initialTargetId = initialHash.substring(1) + '-view';
-        switchView(initialTargetId, true);
-
+    function setupNavigation() {
         document.querySelectorAll('#sidebar .nav-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 e.preventDefault();
                 const targetId = item.getAttribute('data-target');
                 if (targetId) {
                     switchView(targetId);
-                    window.location.hash = item.getAttribute('href');
+                    window.location.hash = item.getAttribute('href'); // Update hash for bookmarking/history
                 }
             });
-        });
-
-        window.addEventListener('hashchange', () => {
-            const hash = window.location.hash || '#search';
-            const targetId = hash.substring(1) + '-view';
-            switchView(targetId, true);
         });
 
         if (hamburgerMenuButton && sidebar && sidebarBackdrop) {
             hamburgerMenuButton.addEventListener('click', () => toggleSidebar(true));
             sidebarBackdrop.addEventListener('click', () => toggleSidebar(false));
         }
-        // Global Tooltip Logic (using aria-label)
+        // Tooltip setup (can use your existing logic from V4)
         document.body.addEventListener('mouseover', handleTooltipShow);
         document.body.addEventListener('mouseout', handleTooltipHide);
-        document.body.addEventListener('focusin', handleTooltipShow);
-        document.body.addEventListener('focusout', handleTooltipHide);
     }
     
-    function toggleSidebar(show) {
-        // ... (Your existing toggleSidebar logic) ...
-    }
-    function handleTooltipShow(e) { /* ... */ }
-    function handleTooltipHide(e) { /* ... */ }
-    function positionTooltip(targetElement) { /* ... */ }
+    function switchView(targetViewId, isInitialOrHistory = false) {
+        logger(`Switching to view: ${targetViewId}`);
+        if (activePlyrInstance) { activePlyrInstance.destroy(); activePlyrInstance = null; }
+        
+        viewContainer.querySelectorAll('.app-view').forEach(view => view.classList.add('hidden'));
+        const targetView = document.getElementById(targetViewId);
+        
+        if (targetView) {
+            targetView.classList.remove('hidden');
+        } else {
+            logger(`Target view '${targetViewId}' not found, defaulting to search-view.`, 'warn');
+            document.getElementById('search-view')?.classList.remove('hidden');
+            if (window.location.hash !== '#search' && !isInitialOrHistory) window.location.hash = '#search';
+        }
+        
+        document.querySelectorAll('#sidebar .nav-item').forEach(item => {
+            item.classList.toggle('active', item.getAttribute('data-target') === targetViewId);
+        });
 
+        if (!isInitialOrHistory && window.innerWidth < 768) { // Tailwind 'md' breakpoint
+             toggleSidebar(false);
+        }
+    }
+
+    function toggleSidebar(show) {
+        if (sidebar && sidebarBackdrop) {
+           if (show) {
+                sidebar.classList.remove('-translate-x-full'); sidebar.classList.add('translate-x-0');
+                sidebarBackdrop.classList.remove('hidden');
+            } else {
+                sidebar.classList.remove('translate-x-0'); sidebar.classList.add('-translate-x-full');
+                sidebarBackdrop.classList.add('hidden');
+            }
+        }
+    }
+    
+    function setupUserProfile() {
+        if (USER_IS_AUTHENTICATED) {
+            const displayName = (USER_FIRST_NAME || USER_LAST_NAME) ? `${USER_FIRST_NAME || ''} ${USER_LAST_NAME || ''}`.trim() : USER_EMAIL.split('@')[0];
+            const initial = displayName.charAt(0).toUpperCase();
+
+            if (userAvatarInitial) userAvatarInitial.textContent = initial;
+            if (userNameSidebar) userNameSidebar.textContent = displayName;
+            if (userEmailSidebar) userEmailSidebar.textContent = USER_EMAIL;
+            if (userNameSettings) userNameSettings.textContent = displayName;
+            if (userEmailSettings) userEmailSettings.textContent = USER_EMAIL;
+        } else {
+            logger("User not authenticated - profile placeholders not updated.", "warn");
+        }
+    }
+
+    function setupLogout() {
+        if (logoutButton) {
+            logoutButton.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (confirm('Are you sure you want to log out?')) {
+                    // Django allauth typically uses a POST to /accounts/logout/ or GET if configured
+                    // Create a form and submit it for POST logout to be CSRF safe
+                    const logoutForm = document.createElement('form');
+                    logoutForm.method = 'POST';
+                    logoutForm.action = '/accounts/logout/'; // Allauth logout URL
+                    const csrfInput = document.createElement('input');
+                    csrfInput.type = 'hidden';
+                    csrfInput.name = 'csrfmiddlewaretoken';
+                    csrfInput.value = CSRF_TOKEN; // Global CSRF_TOKEN from HTML
+                    logoutForm.appendChild(csrfInput);
+                    document.body.appendChild(logoutForm);
+                    logoutForm.submit();
+                }
+            });
+        }
+    }
 
     function setupSearchForm() {
         if (searchForm) {
-            searchForm.addEventListener('submit', handleSearchSubmit);
-        } else {
-            console.warn("Search form with ID 'papri-search-form' not found.");
+            searchForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                currentPage = 1; // Reset to first page for new search
+                initiateSearch();
+            });
         }
-        // Event listener for result actions (play, source, etc.)
+        if (searchImageInput && searchImageFilename) {
+            searchImageInput.addEventListener('change', () => {
+                searchImageFilename.textContent = searchImageInput.files.length > 0 ? searchImageInput.files[0].name : '';
+            });
+        }
         if (searchResultsContainer) {
-            searchResultsContainer.addEventListener('click', handleResultAction);
-            // searchResultsContainer.addEventListener('keypress', handleResultKeyPress); // If needed
+            searchResultsContainer.addEventListener('click', handleResultCardAction);
+        }
+    }
+    
+    function setupFilterControls() {
+        if (toggleFiltersButton && searchFiltersContainer) {
+            toggleFiltersButton.addEventListener('click', () => {
+                searchFiltersContainer.classList.toggle('hidden');
+                toggleFiltersButton.innerHTML = searchFiltersContainer.classList.contains('hidden') ? 
+                    '<i data-lucide="filter" class="inline-block w-4 h-4 mr-1"></i> Show Filters' : 
+                    '<i data-lucide="x" class="inline-block w-4 h-4 mr-1"></i> Hide Filters';
+                lucide.createIcons();
+            });
+        }
+        if (applyFiltersButton) {
+            applyFiltersButton.addEventListener('click', () => {
+                currentPage = 1; // Reset to first page when applying new filters
+                collectAndApplyFilters();
+                initiateSearch(true); // Pass true to indicate it's a filter-driven search
+            });
+        }
+        if (clearFiltersButton) {
+            clearFiltersButton.addEventListener('click', () => {
+                // Reset filter UI elements
+                if(filterPlatformSelect) filterPlatformSelect.value = "";
+                if(filterDurationSelect) filterDurationSelect.value = "";
+                if(filterDateAfterInput) filterDateAfterInput.value = "";
+                // if(filterDateBeforeInput) filterDateBeforeInput.value = ""; // If you add date before
+                if(filterSortBySelect) filterSortBySelect.value = "relevance";
+                
+                currentPage = 1;
+                collectAndApplyFilters(); // This will clear currentFilters object
+                initiateSearch(true);
+            });
         }
     }
 
-    // --- Search Handling (NEW/MODIFIED) ---
-    async function handleSearchSubmit(event) {
-        event.preventDefault();
-        clearPolling(); // Clear any previous polling
-        searchResultsContainer.innerHTML = ''; // Clear previous results
-        if (activePlyrInstance) { activePlyrInstance.destroy(); activePlyrInstance = null; }
+    function collectAndApplyFilters() {
+        currentFilters = {};
+        if (filterPlatformSelect && filterPlatformSelect.value) currentFilters.platform = filterPlatformSelect.value;
+        
+        if (filterDurationSelect && filterDurationSelect.value) {
+            const duration = filterDurationSelect.value;
+            if (duration === "short") currentFilters.duration_max = 300; // < 5 min
+            else if (duration === "medium") {currentFilters.duration_min = 300; currentFilters.duration_max = 1200;} // 5-20 min
+            else if (duration === "long") currentFilters.duration_min = 1200; // > 20 min
+        }
+        if (filterDateAfterInput && filterDateAfterInput.value) currentFilters.date_after = filterDateAfterInput.value;
+        // if (filterDateBeforeInput && filterDateBeforeInput.value) currentFilters.date_before = filterDateBeforeInput.value;
+        
+        currentSortBy = (filterSortBySelect && filterSortBySelect.value) ? filterSortBySelect.value : "relevance";
+        logger("Filters collected: " + JSON.stringify(currentFilters) + ", Sort: " + currentSortBy);
+    }
+
+
+    async function initiateSearch(isFilterOrSortChange = false) {
+        if (!isFilterOrSortChange) { // If it's a brand new search from the main form
+            clearPolling();
+            searchResultsContainer.innerHTML = '<p class="text-center text-slate-500 italic py-8">Preparing your search...</p>';
+            if (activePlyrInstance) { activePlyrInstance.destroy(); activePlyrInstance = null; }
+            collectAndApplyFilters(); // Ensure filters are current before new search
+        } else {
+             logger("Re-initiating search due to filter/sort/page change.");
+             // Don't clear task ID if it's just a filter change on existing results,
+             // but backend API needs to support re-filtering/sorting an existing task's results or re-querying.
+             // For V1, let's assume filters always trigger a new search task or a new query to SearchResultsView.
+             // If SearchResultsView handles filters on an existing task ID, this can be simpler.
+             // Our current SearchResultsView applies filters to the Video objects from the task's stored IDs.
+             // So, if task ID exists and it's just filter/sort, we call fetchAndDisplayResults directly.
+             if(currentSearchTaskId && searchStatusDiv.dataset.taskStatus === 'completed') {
+                 fetchAndDisplayResults(currentSearchTaskId, currentPage, currentFilters, currentSortBy);
+                 return;
+             }
+             // If no completed task ID, or not a filter change, proceed with new search task.
+        }
+
 
         const queryText = searchQueryInput.value.trim();
         const imageFile = searchImageInput.files[0];
-        // const sourceUrl = searchSourceUrlInput.value.trim(); // Add if you have this input
+        const sourceUrl = searchSourceUrlInput.value.trim();
 
-        if (!queryText && !imageFile) {
-            showStatusMessage('Please enter a search query or upload an image.', 'error', searchStatusDiv);
+        if (!queryText && !imageFile && !isFilterOrSortChange) { // Only error if truly no input for a new search
+            showStatusMessage('Please enter a text query or upload an image.', 'error', searchStatusDiv);
             return;
         }
 
         const formData = new FormData();
-        if (queryText) {
-            formData.append('query_text', queryText);
-        }
-        if (imageFile) {
-            formData.append('query_image', imageFile);
-        }
-        // if (sourceUrl) {
-        //     formData.append('video_url', sourceUrl); // If your backend API accepts this
-        // }
-        // Add any filters from UI to formData if needed
+        if (queryText) formData.append('query_text', queryText);
+        if (imageFile) formData.append('query_image', imageFile);
+        if (sourceUrl) formData.append('video_url', sourceUrl);
+        
+        // Pass filters that are applied AT INITIATION TIME (if any in your design)
+        // formData.append('filters', JSON.stringify(currentFilters)); // Example
 
         showStatusMessage('<span><span class="spinner mr-2"></span>Initiating AI search...</span>', 'loading', searchStatusDiv);
+        startSearchButton.disabled = true;
 
         try {
-            const response = await fetch('/api/search/initiate/', { // Your Django API endpoint
+            const response = await fetch('/api/search/initiate/', {
                 method: 'POST',
-                headers: {
-                    'X-CSRFToken': csrftoken,
-                    // 'Content-Type': 'multipart/form-data' is set automatically by browser for FormData
-                },
+                headers: { 'X-CSRFToken': CSRF_TOKEN },
                 body: formData,
             });
 
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ error: 'Failed to initiate search. Server error.' }));
-                throw new Error(errorData.error || `HTTP error! Status: ${response.status}`);
+                const errorData = await response.json().catch(() => ({ error: 'Server error during search initiation.' }));
+                throw new Error(errorData.error || `HTTP ${response.status}`);
             }
 
             const data = await response.json();
-            currentSearchTaskId = data.id; // Assuming 'id' is the task_id field from SearchTaskSerializer
-            showStatusMessage(`<span><span class="spinner mr-2"></span>Search started (ID: ${currentSearchTaskId.substring(0,8)}...). Checking status...</span>`, 'loading', searchStatusDiv);
+            currentSearchTaskId = data.id;
+            searchStatusDiv.dataset.taskStatus = data.status;
+            showStatusMessage(`<span><span class="spinner mr-2"></span>Search started (ID: ${currentSearchTaskId.substring(0,8)}...). Awaiting results...</span>`, 'loading', searchStatusDiv);
             startPollingStatus(currentSearchTaskId);
 
         } catch (error) {
-            console.error("Search initiation error:", error);
+            logger(`Search initiation error: ${error.message}`, 'error');
             showStatusMessage(`Search initiation failed: ${error.message}`, 'error', searchStatusDiv);
             currentSearchTaskId = null;
+            startSearchButton.disabled = false;
         }
     }
 
     function startPollingStatus(taskId) {
-        clearPolling(); // Clear existing interval if any
-
+        clearPolling();
+        logger(`Polling status for task ID: ${taskId}`);
         pollingInterval = setInterval(async () => {
-            if (!currentSearchTaskId) { // Safety check
+            if (!currentSearchTaskId || currentSearchTaskId !== taskId) { // Stop if task ID changed or cleared
                 clearPolling();
                 return;
             }
             try {
                 const response = await fetch(`/api/search/status/${taskId}/`);
                 if (!response.ok) {
-                    // If 404, task might not exist or was invalid
                     if (response.status === 404) {
-                         showStatusMessage(`Search task ${taskId.substring(0,8)} not found.`, 'error', searchStatusDiv);
-                         clearPolling();
-                         currentSearchTaskId = null;
-                         return;
+                        showStatusMessage(`Search task ${taskId.substring(0,8)} not found. It might have expired or been an error.`, 'error', searchStatusDiv);
+                        clearPolling(); currentSearchTaskId = null; startSearchButton.disabled = false; return;
                     }
-                    throw new Error(`HTTP error! Status: ${response.status}`);
+                    throw new Error(`HTTP ${response.status}`);
                 }
                 const data = await response.json();
+                searchStatusDiv.dataset.taskStatus = data.status;
 
                 if (data.status === 'completed' || data.status === 'partial_results') {
                     clearPolling();
-                    showStatusMessage(`Search complete! Fetching results for task ${taskId.substring(0,8)}...`, 'success', searchStatusDiv);
-                    fetchResults(taskId);
+                    showStatusMessage(`Search task ${taskId.substring(0,8)} complete! Fetching results...`, 'success', searchStatusDiv);
+                    fetchAndDisplayResults(taskId, currentPage, currentFilters, currentSortBy); // Pass current page, filters, sort
+                    startSearchButton.disabled = false;
                 } else if (data.status === 'failed') {
                     clearPolling();
-                    showStatusMessage(`Search failed for task ${taskId.substring(0,8)}: ${data.error_message || 'Unknown error'}`, 'error', searchStatusDiv);
-                    currentSearchTaskId = null;
-                } else {
-                    // Still processing or pending
+                    showStatusMessage(`Search failed for task ${taskId.substring(0,8)}: ${data.error_message || 'Unknown processing error.'}`, 'error', searchStatusDiv);
+                    currentSearchTaskId = null; startSearchButton.disabled = false;
+                } else { // Still processing or pending
                     showStatusMessage(`<span><span class="spinner mr-2"></span>Search in progress (Status: ${data.status})...</span>`, 'loading', searchStatusDiv);
                 }
             } catch (error) {
-                console.error("Polling error:", error);
-                showStatusMessage(`Error checking search status: ${error.message}`, 'error', searchStatusDiv);
-                // Optionally stop polling on persistent errors or after a timeout
-                // clearPolling();
+                logger(`Polling error: ${error.message}`, 'error');
+                // Don't clear polling on transient network errors, but maybe after N retries
             }
-        }, 3000); // Poll every 3 seconds
+        }, 3500); // Poll every 3.5 seconds
     }
 
     function clearPolling() {
-        if (pollingInterval) {
-            clearInterval(pollingInterval);
-            pollingInterval = null;
-        }
+        if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; logger("Polling cleared.");}
     }
 
-    async function fetchResults(taskId) {
-        try {
-            const response = await fetch(`/api/search/results/${taskId}/`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}`);
-            }
-            const data = await response.json();
+    async function fetchAndDisplayResults(taskId, page = 1, filters = {}, sortBy = "relevance") {
+        logger(`Workspaceing results for task ${taskId}, Page: ${page}, Filters: ${JSON.stringify(filters)}, Sort: ${sortBy}`);
+        showStatusMessage('<span><span class="spinner mr-2"></span>Loading results...</span>', 'loading', searchStatusDiv);
+        startSearchButton.disabled = true; // Disable while fetching results too
 
-            // Assuming data.results_data is an array of video objects from your backend
-            // This will be based on VideoResultSerializer or similar
+        let queryParams = `?page=${page}&sort_by=${sortBy}`;
+        if (filters.platform) queryParams += `&platform=${encodeURIComponent(filters.platform)}`;
+        if (filters.duration_min) queryParams += `&duration_min=${filters.duration_min}`;
+        if (filters.duration_max) queryParams += `&duration_max=${filters.duration_max}`;
+        if (filters.date_after) queryParams += `&date_after=${filters.date_after}`;
+        // if (filters.date_before) queryParams += `&date_before=${filters.date_before}`;
+
+
+        try {
+            const response = await fetch(`/api/search/results/${taskId}/${queryParams}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status} fetching results`);
+            
+            const data = await response.json(); // Expects paginated response
+            
+            searchResultsContainer.innerHTML = ''; // Clear for new results/page
             if (data.results_data && data.results_data.length > 0) {
-                displayResults(data.results_data); // Use your existing displayResults or adapt it
-                searchStatusDiv.classList.add('hidden'); // Hide status on successful display
+                displayResultCards(data.results_data);
+                setupPagination(data.count, data.next, data.previous, page);
+                searchStatusDiv.classList.add('hidden');
             } else {
-                showStatusMessage('No relevant results found for your query.', 'info', searchStatusDiv);
+                searchResultsContainer.innerHTML = '<p class="text-center text-slate-500 italic py-8">No relevant results found for your query or filter combination.</p>';
+                paginationControls.innerHTML = ''; paginationControls.classList.add('hidden');
+                showStatusMessage('No results found.', 'info', searchStatusDiv);
             }
         } catch (error) {
-            console.error("Fetch results error:", error);
+            logger(`Workspace results error: ${error.message}`, 'error');
             showStatusMessage(`Failed to fetch results: ${error.message}`, 'error', searchStatusDiv);
+            searchResultsContainer.innerHTML = '<p class="text-center text-red-500 italic py-8">Error loading results. Please try again.</p>';
         } finally {
-            currentSearchTaskId = null; // Reset for next search
+            startSearchButton.disabled = false;
         }
     }
 
-    // --- Result Display and Actions ---
-    // Adapt your existing createResultCardElement and displayResults functions
-    // The 'result' object passed to createResultCardElement will now come from our Django backend
-    // Ensure the fields match what VideoResultSerializer provides.
-    function displayResults(results) {
-        searchResultsContainer.innerHTML = ''; // Clear previous
-        if (results.length === 0) {
-            searchResultsContainer.innerHTML = '<p class="text-center text-gray-500 italic">No results found.</p>';
-            return;
-        }
-        results.forEach(result => {
-            // Assuming 'result' has: id, title, description, publication_date, primary_thumbnail_url, sources
-            // And each source in 'sources' has: platform_name, original_url, embed_url
-            // You'll need to adapt createResultCardElement to use these fields.
-            const card = createResultCardElement_Django(result); // **MODIFIED to a new function for clarity**
+    function displayResultCards(results) { // Renamed from displayResults
+        results.forEach(video_result => {
+            const card = createResultCardElement(video_result); // Changed from _Django, make this the main one
             searchResultsContainer.appendChild(card);
         });
-        initLucideIcons(); // Re-initialize icons if new ones are added
+        lucide.createIcons();
     }
 
-    function createResultCardElement_Django(result) {
+    function createResultCardElement(video_result) { // Main card creation function
         const card = document.createElement('div');
-        // Unique ID for the card, can use result.id from Video model
-        card.id = `result-${result.id}`; 
-        card.className = 'result-card bg-white p-3 sm:p-4 rounded-lg shadow border border-gray-200 flex flex-col md:flex-row gap-3 sm:gap-4 overflow-hidden';
+        card.id = `result-papri-${video_result.id}`; 
+        card.className = 'result-card bg-white p-3 sm:p-4 rounded-lg shadow-md hover:shadow-lg transition-shadow duration-200 border border-slate-200 flex flex-col md:flex-row gap-4 overflow-hidden';
 
-        // Extracting data (adjust based on your VideoResultSerializer structure)
-        const title = result.title || 'Untitled Video';
-        const thumbnailUrl = result.primary_thumbnail_url || 'https://via.placeholder.com/320x180.png?text=No+Thumbnail';
-        const description = result.description || 'No description available.';
-        const publicationDate = result.publication_date ? new Date(result.publication_date).toLocaleDateString() : 'N/A';
+        const title = video_result.title || 'Untitled Video';
+        const thumbnailUrl = video_result.primary_thumbnail_url || `https://via.placeholder.com/320x180.png?text=No+Thumb`;
+        let description = video_result.description || 'No description available.';
+        if (description.length > 200) description = description.substring(0, 197) + '...';
         
-        // Assuming 'sources' is an array and we take the first one for display simplicity
-        const primarySource = result.sources && result.sources.length > 0 ? result.sources[0] : null;
-        const sourcePlatform = primarySource ? primarySource.platform_name : 'Unknown';
-        const originalUrl = primarySource ? primarySource.original_url : '#';
+        const pubDateObj = video_result.publication_date ? new Date(video_result.publication_date) : null;
+        const publicationDate = pubDateObj ? pubDateObj.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A';
         
-        // Data attributes for player (these will be filled by AI agent later)
-        // card.dataset.startTime = result.matched_start_time || 0;
-        // card.dataset.endTime = result.matched_end_time || result.duration_seconds || 0;
-        // card.dataset.videoUrl = primarySource ? (primarySource.embed_url || primarySource.original_url) : '#';
+        const primarySource = video_result.sources && video_result.sources.length > 0 ? video_result.sources[0] : {};
+        const sourcePlatform = primarySource.platform_name || 'Unknown';
+        const originalUrl = primarySource.original_url || '#';
+        
+        // V1 Data from backend
+        const textSnippet = video_result.text_snippet;
+        const matchTypes = video_result.match_types || [];
+        const bestMatchTimestampMs = video_result.best_match_timestamp_ms;
 
-        // Simplified card structure for now - Adapt your V3/V4 createResultCardElement structure here
+        let matchInfoHtml = '';
+        if (matchTypes.length > 0) {
+            let typesString = matchTypes.map(type => { // Prettier names
+                if (type === 'text_kw') return 'Keywords'; if (type === 'text_sem') return 'Text Meaning';
+                if (type === 'vis_cnn') return 'Image Content'; if (type === 'vis_phash') return 'Similar Image';
+                if (type === 'fallback_date') return 'Recent'; return type;
+            }).join(', ');
+            matchInfoHtml += `<p class="text-xs text-indigo-600 font-semibold mt-1.5">Matched via: ${typesString}</p>`;
+        }
+        if (textSnippet) {
+            const cleanSnippet = textSnippet.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            matchInfoHtml += `<p class="text-xs text-slate-600 mt-1 italic bg-slate-50 p-2 rounded">"...${cleanSnippet}..."</p>`;
+        }
+        if (bestMatchTimestampMs !== null && bestMatchTimestampMs !== undefined) {
+            matchInfoHtml += `<p class="text-xs text-green-600 font-semibold mt-1">Key visual match around: ${formatDuration(bestMatchTimestampMs / 1000)}</p>`;
+            card.dataset.bestMatchTimestamp = bestMatchTimestampMs / 1000;
+        }
+        card.dataset.videoUrl = primarySource.embed_url || originalUrl; // For Plyr
+        card.dataset.videoSourceType = sourcePlatform.toLowerCase().includes('youtube") ? 'youtube' : (sourcePlatform.toLowerCase().includes('vimeo") ? 'vimeo' : 'html5');
+        card.dataset.videoId = primarySource.platform_video_id;
+
+
         card.innerHTML = `
             <div class="w-full md:w-48 lg:w-56 flex-shrink-0">
-                <div class="aspect-video bg-gray-300 rounded overflow-hidden relative group thumbnail-container" 
-                     aria-label="Preview video: ${title}">
-                    <img src="${thumbnailUrl}" alt="Video thumbnail for ${title}" class="w-full h-full object-cover" loading="lazy">
+                <div class="aspect-video bg-slate-300 rounded-md overflow-hidden relative group thumbnail-container cursor-pointer" 
+                     aria-label="Preview video: ${title} on ${sourcePlatform}"
+                     data-plyr-provider="${card.dataset.videoSourceType}" 
+                     data-plyr-embed-id="${card.dataset.videoSourceType === 'html5' ? card.dataset.videoUrl : card.dataset.videoId}"> 
+                    <img src="${thumbnailUrl}" alt="Thumbnail for ${title}" class="w-full h-full object-cover" loading="lazy">
                     <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-opacity duration-200">
-                        <i data-lucide="play-circle" class="w-10 h-10 text-white opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none"></i>
+                        <i data-lucide="play" class="w-12 h-12 text-white opacity-0 group-hover:opacity-80 transition-opacity pointer-events-none"></i>
                     </div>
                 </div>
-                <p class="text-xs text-center text-gray-500 mt-1 md:mt-1.5">Source: ${sourcePlatform}</p>
+                <p class="text-xs text-center text-slate-500 mt-1.5">Source: ${sourcePlatform}</p>
             </div>
 
             <div class="flex-grow min-w-0">
-                <h3 class="text-md sm:text-lg font-semibold text-indigo-700 mb-1 line-clamp-2">${title}</h3>
-                <p class="text-xs text-gray-500 mb-2">Published: ${publicationDate}</p>
-                <p class="text-sm text-gray-600 line-clamp-3 mb-3">${description}</p>
+                <h3 class="text-md sm:text-lg font-semibold text-indigo-700 mb-1 line-clamp-2 hover:text-indigo-800">
+                    <a href="${originalUrl}" target="_blank" rel="noopener noreferrer">${title}</a>
+                </h3>
+                <div class="text-xs text-slate-500 mb-2 flex flex-wrap gap-x-3">
+                    <span>Published: ${publicationDate}</span>
+                    <span>Duration: ${formatDuration(video_result.duration_seconds)}</span>
+                </div>
+                <p class="text-sm text-slate-700 line-clamp-3 mb-2">${description}</p>
                 
-                <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center">
-                    <button class="action-button btn-preview" aria-label="Preview this video" disabled> 
-                        <i data-lucide="play-circle" class="action-icon"></i> Preview
+                ${matchInfoHtml}
+                
+                <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-2 items-center">
+                    <button class="action-button btn-preview-segment" aria-label="Preview best segment" 
+                        ${bestMatchTimestampMs === null ? 'disabled' : ''} title="${bestMatchTimestampMs === null ? 'No specific segment identified' : 'Preview best segment'}"> 
+                        <i data-lucide="film" class="action-icon"></i> Preview Segment
                     </button>
-                    <a href="${originalUrl}" target="_blank" class="action-button btn-source" aria-label="Open original source">
+                    <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="action-button btn-source">
                         <i data-lucide="external-link" class="action-icon"></i> Source
                     </a>
-                    <button class="action-button btn-save-clip" aria-label="Save this video" disabled>
-                        <i data-lucide="bookmark-plus" class="action-icon"></i> Save 
+                    <button class="action-button btn-add-collection" aria-label="Add to collection" title="Add to Collection (coming soon)" disabled>
+                        <i data-lucide="plus-square" class="action-icon"></i> Collect
                     </button>
-                    </div>
+                </div>
+            </div>
+            <div class="video-player-wrapper w-full md:col-span-2 mt-3 hidden rounded-md overflow-hidden">
+                <video class="papri-video-player" playsinline controls preload="none"></video>
             </div>
         `;
-        // Add more details and actions as your AI backend provides them (timestamps, snippets etc.)
-        // The btn-preview, btn-save-clip etc. will need data attributes set with video URLs and segment times
-        // once the AI provides that level of detail. For now, they might be disabled or link to full source.
         return card;
     }
 
-    // --- Event Handlers for result card actions (play, source, etc.) ---
-    // Your existing handleResultAction can be adapted.
-    // It needs to get video URLs and segment times from card.dataset attributes.
-    // Since the AI agent part is not yet returning these specific details,
-    // these actions might be limited initially.
-    function handleResultAction(e) {
-        const target = e.target;
-        const button = target.closest('button, a, .thumbnail-container');
+    function handleResultCardAction(event) {
+        const button = event.target.closest('button.action-button, .thumbnail-container');
         if (!button) return;
 
         const card = button.closest('.result-card');
         if (!card) return;
         
-        if (window.innerWidth < 768) { // Assuming md breakpoint is 768px
-            toggleSidebar(false);
-        }
+        // Close mobile sidebar if an action is taken
+        if (window.innerWidth < 768) toggleSidebar(false);
 
-        if (button.tagName === 'BUTTON' || button.classList.contains('thumbnail-container') || button.classList.contains('share-item')) {
-             e.preventDefault();
-        }
+        const videoUrl = card.dataset.videoUrl;
+        const videoProvider = card.dataset.videoSourceType;
+        const videoPlatformId = card.dataset.videoId; // YouTube/Vimeo ID
 
-        // const videoUrl = card.dataset.videoUrl; // These will be set once AI provides them
-        // const startTime = parseFloat(card.dataset.startTime);
-        // const endTime = parseFloat(card.dataset.endTime);
+        if (button.classList.contains('thumbnail-container') || button.classList.contains('btn-preview-segment')) {
+            event.preventDefault();
+            const playerWrapper = card.querySelector('.video-player-wrapper');
+            const videoElement = card.querySelector('video.papri-video-player');
+            
+            if (!playerWrapper || !videoElement) {
+                logger("Player elements not found in card.", "error");
+                return;
+            }
 
-        if (button.classList.contains('btn-preview') || button.classList.contains('thumbnail-container')) {
-             // TODO: Implement player logic once videoUrl and segment times are available
-             alert('Preview functionality to be implemented with AI results.');
-             // activatePlayer(card, videoUrl, startTime, endTime, 'preview');
-        } else if (button.classList.contains('btn-source')) {
-             // This is already an anchor tag, default behavior will open link.
-             // If it was a button: window.open(button.href, '_blank', 'noopener,noreferrer');
-        } else if (button.classList.contains('btn-save-clip')) {
-             alert('Save clip functionality to be implemented.');
-        }
-        // ... other actions from your V4 ...
-    }
-    
-    // --- Utility Functions (formatTime, showStatusMessage) ---
-    function showStatusMessage(message, type = 'info', element) {
-        if (!element) return;
-        element.innerHTML = message; // Allow HTML for spinner etc.
-        element.className = 'mb-4 p-3 rounded-md text-sm '; // Reset classes
-        switch (type) {
-            case 'error': element.classList.add('bg-red-100', 'text-red-700'); break;
-            case 'success': element.classList.add('bg-green-100', 'text-green-700'); break;
-            case 'loading': element.classList.add('bg-blue-100', 'text-blue-700'); break;
-            case 'info': default: element.classList.add('bg-yellow-100', 'text-yellow-700'); break;
-        }
-        element.classList.remove('hidden');
-    }
-
-    function switchView(targetId, isInitialOrHistory = false) {
-        // ... (Your existing switchView logic) ...
-        if (activePlyrInstance) {
-            activePlyrInstance.destroy(); activePlyrInstance = null;
-        }
-        viewContainer.querySelectorAll('.app-view').forEach(view => view.classList.add('hidden'));
-        const targetView = document.getElementById(targetId);
-        if (targetView) {
-            targetView.classList.remove('hidden');
-        } else {
-            // Fallback to search view if target not found
-            document.getElementById('search-view')?.classList.remove('hidden');
-            if (window.location.hash !== '#search' && !isInitialOrHistory) window.location.hash = '#search';
-        }
-        document.querySelectorAll('#sidebar .nav-item').forEach(item => {
-            item.classList.toggle('active', item.getAttribute('data-target') === targetId);
-        });
-        if (!isInitialOrHistory && window.innerWidth < 768) {
-             toggleSidebar(false);
-        }
-    }
-
-    // --- Placeholder/Demo functions (adapt or replace) ---
-    function setupReferralCopy() { /* ... (Your existing V4 logic) ... */ }
-    function setupSettingsActions() { /* ... (Your existing V4 logic) ... */ }
-    function setupLogout() {
-        // Adapt for Django logout: typically a link to '/accounts/logout/'
-        const logoutButton = document.getElementById('logout-button');
-        if (logoutButton) {
-            logoutButton.addEventListener('click', (e) => {
-                e.preventDefault();
-                if (confirm('Are you sure you want to log out?')) {
-                    // Make a POST request to Django's logout or redirect
-                    // For simple GET-based logout (if allauth is configured for it):
-                    window.location.href = '/accounts/logout/';
+            // If this player is already active, destroy it (toggle off)
+            if (activePlyrInstance && activePlyrInstance.elements.container.closest('.result-card') === card) {
+                activePlyrInstance.destroy();
+                activePlyrInstance = null;
+                playerWrapper.classList.add('hidden');
+                return;
+            }
+            
+            // Destroy any other active player
+            if (activePlyrInstance) {
+                const oldCard = activePlyrInstance.elements.container.closest('.result-card');
+                if (oldCard) {
+                     oldCard.querySelector('.video-player-wrapper')?.classList.add('hidden');
                 }
+                activePlyrInstance.destroy();
+                activePlyrInstance = null;
+            }
+
+            // Setup new player
+            playerWrapper.classList.remove('hidden');
+            videoElement.dataset.plyrProvider = videoProvider;
+            if (videoProvider === 'html5') {
+                videoElement.src = videoUrl; // For direct MP4 links
+            } else {
+                videoElement.dataset.plyrEmbedId = videoPlatformId;
+            }
+            
+            activePlyrInstance = new Plyr(videoElement, {
+                autoplay: true,
+                // controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'],
+            });
+
+            activePlyrInstance.on('ready', () => {
+                if (button.classList.contains('btn-preview-segment') && card.dataset.bestMatchTimestamp) {
+                    const startTime = parseFloat(card.dataset.bestMatchTimestamp);
+                    if (!isNaN(startTime) && startTime > 0) {
+                        activePlyrInstance.currentTime = startTime;
+                        logger(`Player ready, seeking to timestamp: ${startTime}`);
+                    }
+                }
+                activePlyrInstance.play();
+            });
+            activePlyrInstance.on('ended', () => { // Optionally hide player on end
+                playerWrapper.classList.add('hidden');
+                activePlyrInstance.destroy();
+                activePlyrInstance = null;
+            });
+             // Scroll the card into view if needed, especially the player
+             playerWrapper.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        } else if (button.classList.contains('btn-source')) {
+            // Default anchor behavior handles this
+        } else if (button.classList.contains('btn-add-collection')) {
+            alert('Add to collection feature coming soon!');
+        }
+    }
+
+    function setupPagination(count, nextUrl, prevUrl, currentPageNum) {
+        paginationControls.innerHTML = ''; // Clear old controls
+        totalResultsCount = count;
+
+        if (count <= (StandardResultsSetPagination.page_size || 12) && !nextUrl && !prevUrl) { // Assuming StandardResultsSetPagination is accessible or use hardcoded page_size
+            paginationControls.classList.add('hidden');
+            return;
+        }
+        paginationControls.classList.remove('hidden');
+
+        const prevButton = document.createElement('button');
+        prevButton.innerHTML = `<i data-lucide="arrow-left" class="mr-1 h-4 w-4 inline"></i> Previous`;
+        prevButton.className = "px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50";
+        prevButton.disabled = !prevUrl;
+        if (prevUrl) {
+            prevButton.addEventListener('click', () => {
+                currentPage--; // Update global current page
+                fetchAndDisplayResults(currentSearchTaskId, currentPage, currentFilters, currentSortBy);
             });
         }
+        paginationControls.appendChild(prevButton);
+
+        const pageInfo = document.createElement('span');
+        const itemsPerPage = (StandardResultsSetPagination.page_size || 12);
+        const totalPages = Math.ceil(count / itemsPerPage);
+        pageInfo.textContent = `Page ${currentPageNum} of ${totalPages} (Total: ${count})`;
+        pageInfo.className = "text-sm text-slate-700 px-3";
+        paginationControls.appendChild(pageInfo);
+
+        const nextButton = document.createElement('button');
+        nextButton.innerHTML = `Next <i data-lucide="arrow-right" class="ml-1 h-4 w-4 inline"></i>`;
+        nextButton.className = "px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50";
+        nextButton.disabled = !nextUrl;
+        if (nextUrl) {
+            nextButton.addEventListener('click', () => {
+                currentPage++; // Update global current page
+                fetchAndDisplayResults(currentSearchTaskId, currentPage, currentFilters, currentSortBy);
+            });
+        }
+        paginationControls.appendChild(nextButton);
+        lucide.createIcons();
     }
-    function updateUserInfoPlaceholders() {
-        // TODO: Fetch user details from an API endpoint like /api/auth/user/
-        // and update .user-name, .user-initial, #profile-email etc.
-        // For now, keep placeholders or simple demo values.
-        fetch('/api/auth/status/') // Use the auth_status endpoint
-            .then(response => response.json())
-            .then(data => {
-                if (data.is_authenticated === false || !data.email) { // Check if actually authenticated
-                    // User not logged in, redirect to login page or show login prompt
-                    // For now, use demo user if no auth, or redirect:
-                    // window.location.href = '/accounts/login/?next=/app/'; // Redirect to login if not on app page.
-                    console.log("User not authenticated, using demo placeholders.");
-                    const userName = "Demo User";
-                    const userInitial = userName.charAt(0).toUpperCase();
-                    document.querySelectorAll('.user-name').forEach(el => el.textContent = userName);
-                    document.querySelectorAll('.user-initial').forEach(el => el.textContent = userInitial);
-                    const emailElement = document.getElementById('profile-email');
-                    if (emailElement) emailElement.textContent = "demo@example.com";
-                } else {
-                    const
 
-
-function displayResults(results_data) { // results_data is the array from VideoResultSerializer
-    searchResultsContainer.innerHTML = ''; 
-    if (!results_data || results_data.length === 0) { // Check if results_data itself is undefined or empty
-        searchResultsContainer.innerHTML = '<p class="text-center text-gray-500 italic">No results found for your query.</p>';
-        return;
+    // --- Utility Functions ---
+    function formatDuration(totalSeconds) {
+        if (totalSeconds === null || totalSeconds === undefined || totalSeconds <= 0) return 'N/A';
+        const h = Math.floor(totalSeconds / 3600); const m = Math.floor((totalSeconds % 3600) / 60); const s = Math.floor(totalSeconds % 60);
+        return (h > 0 ? `${h}:${String(m).padStart(2, '0')}:` : `${String(m).padStart(2, '0')}:`) + String(s).padStart(2, '0');
     }
-    results_data.forEach(video_result => { // Each item is a serialized Video object
-        const card = createResultCardElement_Django(video_result);
-        searchResultsContainer.appendChild(card);
-    });
-    initLucideIcons(); 
-}
-
-function createResultCardElement_Django(video_result) { // video_result is one item from VideoResultSerializer output
-    const card = document.createElement('div');
-    card.id = `result-${video_result.id}`; // Papri Video ID
-    card.className = 'result-card bg-white p-3 sm:p-4 rounded-lg shadow border border-gray-200 flex flex-col md:flex-row gap-3 sm:gap-4 overflow-hidden';
-
-    const title = video_result.title || 'Untitled Video';
-    const thumbnailUrl = video_result.primary_thumbnail_url || `https://via.placeholder.com/320x180.png?text=${encodeURIComponent(title.substring(0,10))}`;
-    const description = video_result.description ? (video_result.description.length > 150 ? video_result.description.substring(0, 147) + '...' : video_result.description) : 'No description available.';
-    const publicationDate = video_result.publication_date ? new Date(video_result.publication_date).toLocaleDateString() : 'N/A';
-    
-    // 'sources' is an array of VideoSourceResultSerializer outputs
-    const primarySourceInfo = video_result.sources && video_result.sources.length > 0 ? video_result.sources[0] : null;
-    const sourcePlatform = primarySourceInfo ? primarySourceInfo.platform_name : 'Unknown Source';
-    const originalUrl = primarySourceInfo ? primarySourceInfo.original_url : '#';
-    
-    // For player functionality later:
-    // card.dataset.videoPapriId = video_result.id;
-    // if (primarySourceInfo) {
-    //     card.dataset.videoSourceUrl = primarySourceInfo.embed_url || primarySourceInfo.original_url;
-    // }
-    // card.dataset.duration = video_result.duration_seconds || 0;
-
-    card.innerHTML = `
-        <div class="w-full md:w-48 lg:w-56 flex-shrink-0">
-            <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="block aspect-video bg-gray-300 rounded overflow-hidden relative group thumbnail-container" 
-                 aria-label="Watch video: ${title} on ${sourcePlatform}">
-                <img src="${thumbnailUrl}" alt="Video thumbnail for ${title}" class="w-full h-full object-cover" loading="lazy">
-                <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-opacity duration-200">
-                    <i data-lucide="play-circle" class="w-10 h-10 text-white opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none"></i>
-                </div>
-            </a>
-            <p class="text-xs text-center text-gray-500 mt-1 md:mt-1.5">Source: ${sourcePlatform}</p>
-        </div>
-
-        <div class="flex-grow min-w-0">
-            <h3 class="text-md sm:text-lg font-semibold text-indigo-700 mb-1 line-clamp-2">
-                <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="hover:underline">${title}</a>
-            </h3>
-            <p class="text-xs text-gray-500 mb-2">Published: ${publicationDate} | Duration: ${formatDuration(video_result.duration_seconds)}</p>
-            <p class="text-sm text-gray-600 line-clamp-3 mb-3">${description}</p>
-            
-            <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center">
-                <button class="action-button btn-preview" data-video-id="${video_result.id}" aria-label="Preview this video (feature coming)" disabled> 
-                    <i data-lucide="play-circle" class="action-icon"></i> Preview
-                </button>
-                <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" class="action-button btn-source" aria-label="Open original source">
-                    <i data-lucide="external-link" class="action-icon"></i> Source
-                </a>
-                <button class="action-button btn-save-clip" data-video-id="${video_result.id}" aria-label="Save this video (feature coming)" disabled>
-                    <i data-lucide="bookmark-plus" class="action-icon"></i> Save 
-                </button>
-                </div>
-        </div>
-    `;
-    return card;
-}
-
-// Helper function to format duration
-function formatDuration(totalSeconds) {
-    if (totalSeconds === null || totalSeconds === undefined || totalSeconds <= 0) {
-        return 'N/A';
+    function showStatusMessage(message, type = 'info', element) { // ... (as before)
+        if (!element) return; element.innerHTML = message; element.className = 'search-status-message mb-4 p-3 rounded-md text-sm ';
+        const typeClasses = {'error': 'bg-red-100 text-red-700','success': 'bg-green-100 text-green-700','loading': 'bg-blue-100 text-blue-700','info': 'bg-yellow-100 text-yellow-700'};
+        element.classList.add(...(typeClasses[type] || typeClasses.info).split(' ')); element.classList.remove('hidden');
     }
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = Math.floor(totalSeconds % 60);
-
-    const paddedSeconds = String(seconds).padStart(2, '0');
-    const paddedMinutes = String(minutes).padStart(2, '0');
-
-    if (hours > 0) {
-        return `${hours}:${paddedMinutes}:${paddedSeconds}`;
-    }
-    return `${paddedMinutes}:${paddedSeconds}`;
-}
+    function handleTooltipShow(e) { /* ... (Your existing V4 logic, ensure dynamicTooltip is defined) ... */ }
+    function handleTooltipHide() { /* ... (Your existing V4 logic) ... */ }
 
 
-// ... (showStatusMessage, switchView, setupReferralCopy, setupSettingsActions, setupLogout, updateUserInfoPlaceholders, handleResultAction etc.) ...
-// Ensure handleResultAction is adapted for any data attributes you add to buttons for interaction.
-
-// In createResultCardElement_Django(video_result)
-
-    // ...
-    const matchTypes = video_result.match_types || [];
-    let matchTypesHtml = '';
-    if (matchTypes.length > 0) {
-        matchTypesHtml = `<p class="text-xs text-blue-500 mt-1">Matched on: ${matchTypes.join(', ').replace(/_/g, ' ')}</p>`;
-    }
-    // ...
-    // Add matchTypesHtml to your card.innerHTML, for example:
-    // card.innerHTML = `
-    //     ...
-    //     <div class="flex-grow min-w-0">
-    //         ... (title, pub_date, description) ...
-    //         ${matchTypesHtml} 
-    //         <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center mt-2"> 
-    //             ... (buttons) ...
-    //         </div>
-    //     </div>
-    // `;
-    // ...
-
-// frontend/static/js/papriapp.js
-// In createResultCardElement_Django(video_result)
-
-    // ...
-    const matchTypes = video_result.match_types || [];
-    const bestMatchTimestampMs = video_result.best_match_timestamp_ms;
-    let matchInfoHtml = '';
-
-    if (matchTypes.length > 0) {
-        let typesString = matchTypes.map(type => {
-            if (type === 'text_kw') return 'Keywords';
-            if (type === 'text_sem') return 'Text Meaning';
-            if (type === 'vis_cnn') return 'Image Similarity';
-            if (type === 'vis_phash') return 'Exact Image Match';
-            return type;
-        }).join(', ');
-        matchInfoHtml += `<p class="text-xs text-blue-600 font-medium mt-1">Matched on: ${typesString}</p>`;
-    }
-    if (bestMatchTimestampMs !== null && bestMatchTimestampMs !== undefined) {
-        matchInfoHtml += `<p class="text-xs text-green-600 mt-1">Best visual match around: ${formatDuration(bestMatchTimestampMs / 1000)}</p>`;
-        // Add data attribute to card or preview button for this timestamp
-        card.dataset.bestMatchTimestamp = bestMatchTimestampMs / 1000; // in seconds
-    }
-    // ...
-    // Add matchInfoHtml to your card.innerHTML:
-    // card.innerHTML = `
-    //     ...
-    //     <div class="flex-grow min-w-0">
-    //         ... (title, pub_date, description) ...
-    //         ${matchInfoHtml} {/* Display match info */}
-    //         <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center mt-2"> 
-    //             ... (buttons) ...
-    //             {/* Modify preview button to use bestMatchTimestamp if available */}
-    //         </div>
-    //     </div>
-    // `;
-    // ...
-
-// Example in papriapp.js when fetching results or applying filters
-let resultsUrl = `/api/search/results/<span class="math-inline">\{taskId\}/?page\=</span>{currentPage}`;
-if (platformFilterValue) resultsUrl += `&platform=${platformFilterValue}`;
-if (durationMin) resultsUrl += `&duration_min=${durationMin}`;
-// ... add other filter/sort params ...
-// const response = await fetch(resultsUrl);
-
-// frontend/static/js/papriapp.js
-// In createResultCardElement_Django(video_result)
-
-    // ... (title, thumbnailUrl, description, publicationDate, sourcePlatform, originalUrl, matchTypes, bestMatchTimestampMs) ...
-    const textSnippet = video_result.text_snippet;
-    let snippetHtml = '';
-    if (textSnippet) {
-        // Sanitize snippet if it might contain user-generated HTML-like content from transcripts
-        // For now, assuming it's plain text.
-        snippetHtml = `<p class="text-xs text-gray-500 mt-1 italic bg-gray-50 p-1 rounded">"${textSnippet.replace(/</g, "&lt;").replace(/>/g, "&gt;")}"</p>`;
-    }
-    // ...
-    // Add snippetHtml to your card.innerHTML, for example, after the description or matchInfoHtml:
-    // card.innerHTML = `
-    //     ...
-    //     <div class="flex-grow min-w-0">
-    //         ... (title, pub_date, description) ...
-    //         ${matchInfoHtml} 
-    //         ${snippetHtml} {/* Display text snippet */}
-    //         <div class="flex flex-wrap gap-1.5 sm:gap-2 items-center mt-2"> 
-    //             ... (buttons) ...
-    //         </div>
-    //     </div>
-    // `;
-    // ...
-                    
+    // --- Start the app ---
+    initializeApp();
+});
