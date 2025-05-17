@@ -1,1 +1,212 @@
+/* frontend/static/css/index.css */
 
+/* Ensure Tailwind's base, components, and utilities are imported if you were using @import with a local Tailwind build.
+   If using CDN, Tailwind applies these automatically.
+   For this file, we'll add custom styles or overrides.
+*/
+
+/* Import Poppins font (as in your original HTML) */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+
+body {
+    font-family: 'Poppins', sans-serif;
+    @apply antialiased text-slate-700 bg-white;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+/* Header Navigation Link Styling */
+header .nav-link { /* Target links within the header specifically */
+    @apply text-sm font-medium text-slate-600 hover:text-indigo-600 transition-all duration-200 ease-in-out pb-1 border-b-2 border-transparent hover:border-indigo-300;
+}
+#mobile-menu .nav-link-mobile { /* For mobile dropdown */
+     @apply block px-3 py-2.5 rounded-md text-base font-medium text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 transition-colors duration-150;
+}
+
+/* Hero Section Enhancements */
+#hero h1 {
+    text-shadow: 0px 1px 3px rgba(0,0,0,0.05); /* Softer shadow */
+}
+#hero .hero-button { /* Common class for hero buttons if needed */
+    @apply w-full sm:w-auto px-8 py-3 text-lg font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2;
+}
+#hero a[data-translate-key="hero_button_try_v2"] { /* Specific style for "Try Demo" */
+    @apply text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
+}
+#hero a[data-translate-key="hero_button_signup_now"] { /* Specific style for "Sign Up Now" */
+    @apply text-indigo-700 bg-white border-2 border-indigo-600 hover:bg-indigo-50 hover:border-indigo-700 focus:ring-indigo-300;
+}
+
+
+/* "Try Papri" Landing Page Demo Form Styling */
+#landing-search-form input[type="url"],
+#landing-search-form input[type="file"], /* For styling the file input text part if needed */
+#landing-search-form textarea {
+    @apply block w-full px-3.5 py-2.5 border border-slate-300 rounded-lg shadow-sm 
+           focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 
+           text-sm transition-colors duration-150 ease-in-out;
+}
+#landing-search-form input[type="file"].file\\:mr-4 { /* Tailwind notation for file: pseudo-element */
+    /* Styles for the file input button part are in HTML via Tailwind */
+}
+#landing-search-submit-button:disabled {
+    @apply bg-indigo-400 cursor-not-allowed;
+}
+
+
+/* Feature Cards ("Why Papri?" Section) Styling */
+.feature-card {
+    @apply text-center p-6 py-8 bg-slate-50 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 ease-in-out transform hover:-translate-y-1;
+}
+.feature-icon-wrapper {
+    @apply inline-flex items-center justify-center w-16 h-16 mb-5 text-indigo-600 bg-gradient-to-br from-indigo-100 to-purple-100 rounded-full shadow-md;
+}
+.feature-icon-wrapper i.lucide {
+    @apply w-8 h-8;
+}
+.feature-title {
+    @apply text-xl font-semibold mb-2 text-slate-800;
+}
+.feature-description {
+    @apply text-slate-600 text-sm leading-relaxed;
+}
+
+/* "How it Works" Step Cards Styling (for the dark background section) */
+.step-card-landing-dark {
+    @apply bg-indigo-700/40 backdrop-blur-sm p-6 rounded-xl shadow-xl border border-indigo-500/60 flex flex-col items-center transition-all duration-300 ease-in-out hover:bg-indigo-700/60 transform hover:scale-105;
+    position: relative;
+}
+.step-number-landing-dark {
+    @apply absolute -top-4 -left-3 w-10 h-10 flex items-center justify-center bg-white text-indigo-700 font-bold text-lg rounded-full shadow-md ring-2 ring-indigo-300;
+}
+.step-icon-landing-dark {
+    @apply w-12 h-12 mb-4 text-indigo-100;
+}
+.step-title-landing-dark {
+    @apply text-lg font-semibold mb-2 text-white;
+}
+.step-description-landing-dark {
+    @apply text-sm text-indigo-100/90;
+}
+
+/* Pricing Section */
+#pricing .price-main {
+    @apply text-slate-900;
+}
+#pricing .price-currency-suffix {
+    @apply text-slate-500;
+}
+#pricing #converted-price-display { /* This element might not be used if main price updates directly */
+    @apply block text-xs text-slate-500 mt-0.5;
+}
+#pricing #price-disclaimer { /* For the "*Exchange rates approx." text */
+    @apply text-xs text-slate-500 mt-1 text-center;
+}
+
+/* Authentication Section Forms Styling (#auth section) */
+.auth-form-container { /* Common container for login and signup blocks */
+    /* Base styles like p-6, rounded-xl, shadow-xl, border are in HTML via Tailwind */
+}
+.auth-form-container h3 { /* For "Create New Account" / "Log In to Papri" */
+    @apply text-2xl font-semibold text-center text-slate-800 mb-2;
+}
+.auth-form-container p.text-sm.text-center.text-slate-500.mb-6 { /* For subtitles */
+    @apply leading-relaxed;
+}
+/* Common input style for auth forms, matching the demo form */
+.auth-input {
+    @apply mt-1 block w-full px-3.5 py-2.5 border border-slate-300 rounded-lg shadow-sm 
+           focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 
+           sm:text-sm transition-colors duration-150;
+}
+/* Common button style for auth forms */
+.auth-button {
+    @apply w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm 
+           text-sm font-medium text-white transition duration-150 ease-in-out
+           focus:outline-none focus:ring-2 focus:ring-offset-2;
+}
+/* Specific colors for buttons are set in HTML via Tailwind (e.g., bg-indigo-600) */
+
+/* "Or continue with" divider styling */
+.auth-form-container .relative .flex.justify-center .px-2 { /* For the span with "Or..." */
+    /* Inherits background from parent, ensure contrast. If parent is bg-slate-50/50: */
+    @apply bg-slate-50; 
+}
+#auth .bg-white .relative .flex.justify-center .px-2 { /* If parent is bg-white */
+    @apply bg-white;
+}
+
+
+/* FAQ Section Accordion Styling */
+.faq-item { /* The <details> tag */
+    @apply bg-slate-50/70 p-5 rounded-lg shadow-sm border border-slate-200 transition-all duration-300 ease-in-out;
+}
+.faq-item:hover {
+    @apply border-indigo-300 shadow-md;
+}
+.faq-item[open] {
+    @apply bg-white border-indigo-300 ring-1 ring-indigo-200;
+}
+.faq-summary { /* The <summary> tag */
+    @apply flex justify-between items-center cursor-pointer list-none py-1 font-medium text-slate-800 hover:text-indigo-600;
+    transition: color 0.2s ease-out;
+}
+.faq-item[open] > .faq-summary { /* Direct child selector */
+    @apply text-indigo-700 mb-2;
+}
+.faq-content { /* The div inside <details> */
+    @apply text-slate-600 text-sm pt-2 pb-1 leading-relaxed;
+    animation: fadeInContent 0.4s ease-out;
+}
+@keyframes fadeInContent {
+    from { opacity: 0; max-height: 0; }
+    to { opacity: 1; max-height: 200px; } /* Adjust max-height as needed */
+}
+.faq-summary::-webkit-details-marker { display: none; }
+.faq-summary::marker { display: none; }
+
+.accordion-icon {
+    @apply text-indigo-600 transition-transform duration-200 ease-out;
+}
+.faq-item[open] .accordion-icon .icon-open { display: none; }
+.faq-item[open] .accordion-icon .icon-close { display: inline-block; }
+.faq-item:not([open]) .accordion-icon .icon-open { display: inline-block; }
+.faq-item:not([open]) .accordion-icon .icon-close { display: none; }
+
+
+/* Footer Link Styling */
+.footer-link {
+    @apply text-slate-400 hover:text-indigo-300 transition duration-150 ease-in-out;
+}
+
+/* Spinner for landing page demo search (from your original CSS) */
+#landing-search-in-progress .spinner {
+    border: 3px solid rgba(79, 70, 229, 0.2); /* indigo-600 opacity 20% */
+    border-left-color: #4f46e5; /* indigo-600 */
+    border-radius: 50%;
+    width: 1.2em; height: 1.2em;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+    vertical-align: -0.25em; 
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Fade-in animation for demo results */
+.animate-fade-in-item {
+    animation: fadeInItemAnimation 0.5s ease-out forwards;
+    opacity: 0;
+    transform: translateY(10px);
+}
+@keyframes fadeInItemAnimation {
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Dynamic Tooltip Styling */
+#dynamic-tooltip {
+    @apply fixed z-[9999] px-2.5 py-1.5 bg-slate-800 text-white text-xs font-medium rounded-md shadow-xl 
+           opacity-0 transition-opacity duration-200 ease-in-out 
+           pointer-events-none whitespace-nowrap;
+    /* JS will handle removing 'hidden' and adding 'opacity-100' */
+}
